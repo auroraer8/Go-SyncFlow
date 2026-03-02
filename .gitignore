@@ -33,7 +33,6 @@ tooling/
 root@*
 
 # ---------- 文档（排除开发文档和 PDF） ----------
-docs/*.pdf
 docs/generate-pdf.sh
 docs/template.tex
 docs/VPN集成代码指南.md
