@@ -1,0 +1,883 @@
+/* ============================================
+   全局样式 - Element Plus 主题覆盖
+   Corporate Design System - 企业风格
+   ============================================ */
+
+/* ---- 禁用管理后台动画（登录页除外） ---- */
+.admin-layout *,
+.admin-layout *::before,
+.admin-layout *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* ---- 全局基础 ---- */
+html {
+  scroll-behavior: auto;
+  background: var(--page-bg);
+}
+
+body {
+  font-family: var(--font-family);
+  color: var(--color-text-primary);
+  background: var(--page-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+
+/* ---- 全局字体颜色统一 ---- */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--color-primary-hover);
+}
+
+/* 统一文字层级 */
+.text-title,
+.card-title,
+.section-title,
+.page-title {
+  color: var(--color-text-primary) !important;
+  font-weight: 600;
+}
+
+.text-desc,
+.text-description,
+.card-desc {
+  color: var(--color-text-secondary) !important;
+}
+
+.text-muted,
+.text-hint,
+.text-tip {
+  color: var(--color-text-tertiary) !important;
+}
+
+/* 防止页面切换闪白 */
+#app {
+  background: var(--page-bg);
+  min-height: 100vh;
+}
+
+/* ---- Element Plus 主色覆盖 ---- */
+:root {
+  --el-color-primary: var(--color-primary);
+  --el-color-primary-light-3: var(--color-primary-hover);
+  --el-color-primary-light-5: #60a5fa;
+  --el-color-primary-light-7: #93c5fd;
+  --el-color-primary-light-8: #bfdbfe;
+  --el-color-primary-light-9: var(--color-primary-bg);
+  --el-color-primary-dark-2: var(--color-primary-active);
+
+  --el-color-success: var(--color-success);
+  --el-color-warning: var(--color-warning);
+  --el-color-danger: var(--color-error);
+  --el-color-info: var(--color-info);
+
+  --el-border-radius-base: var(--radius-md);
+  --el-border-radius-small: var(--radius-sm);
+  --el-border-radius-round: var(--radius-full);
+  --el-border-color: var(--color-border);
+  --el-border-color-light: var(--color-border-secondary);
+  --el-border-color-lighter: var(--color-border-secondary);
+
+  --el-text-color-primary: var(--color-text-primary);
+  --el-text-color-regular: var(--color-text-secondary);
+  --el-text-color-secondary: var(--color-text-tertiary);
+  --el-text-color-placeholder: var(--color-text-quaternary);
+
+  --el-bg-color: var(--color-bg-container);
+  --el-bg-color-page: var(--page-bg);
+  --el-fill-color-blank: var(--color-bg-container);
+
+  --el-font-size-base: var(--font-size-base);
+  --el-font-size-small: var(--font-size-sm);
+  --el-font-size-extra-small: var(--font-size-xs);
+}
+
+/* ============================================
+   按钮样式 - 企业风格
+   ============================================ */
+.el-button {
+  border-radius: var(--radius-md);
+  font-weight: 500;
+  transition: none;
+}
+
+.el-button--primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.el-button--primary:hover,
+.el-button--primary:focus {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.el-button--primary:active {
+  background: var(--color-primary-active);
+  border-color: var(--color-primary-active);
+}
+
+.el-button--primary.is-plain {
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary-border);
+  color: var(--color-primary);
+}
+
+.el-button--primary.is-plain:hover,
+.el-button--primary.is-plain:focus {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #ffffff;
+}
+
+.el-button--success {
+  background: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.el-button--success:hover {
+  background: #22c55e;
+  border-color: #22c55e;
+}
+
+.el-button--warning {
+  background: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+.el-button--warning:hover {
+  background: #f59e0b;
+  border-color: #f59e0b;
+}
+
+.el-button--danger {
+  background: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.el-button--danger:hover {
+  background: #ef4444;
+  border-color: #ef4444;
+}
+
+.el-button--default {
+  background: var(--card-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.el-button--default:hover {
+  background: var(--color-fill-secondary);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* ============================================
+   输入框/选择器 - 企业风格
+   ============================================ */
+.el-input__wrapper,
+.el-textarea__inner {
+  border-radius: var(--radius-md) !important;
+  transition: none;
+  background: var(--card-bg) !important;
+  border: 1px solid var(--color-border) !important;
+  box-shadow: none !important;
+}
+
+.el-input__wrapper:hover,
+.el-textarea__inner:hover {
+  border-color: var(--color-primary-border) !important;
+}
+
+.el-input__wrapper:focus-within,
+.el-input__wrapper.is-focus {
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15) !important;
+}
+
+.el-textarea__inner:focus {
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15) !important;
+}
+
+.el-select .el-select__wrapper {
+  border-radius: var(--radius-md) !important;
+  background: var(--card-bg) !important;
+}
+
+/* ============================================
+   表格 - 企业风格
+   ============================================ */
+.el-table {
+  --el-table-border-color: var(--color-border);
+  --el-table-header-bg-color: var(--color-fill-secondary);
+  --el-table-row-hover-bg-color: var(--color-fill-secondary);
+  font-size: var(--font-size-base);
+  background: transparent !important;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.el-table::before {
+  display: none;
+}
+
+.el-table th.el-table__cell {
+  background: var(--color-fill-secondary) !important;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--color-border) !important;
+}
+
+.el-table td.el-table__cell {
+  border-bottom: 1px solid var(--color-border-secondary) !important;
+}
+
+.el-table tr:hover > td {
+  background: var(--color-fill-secondary) !important;
+}
+
+.el-table--border .el-table__cell {
+  border-right: none !important;
+}
+
+.el-table--border th.el-table__cell {
+  border-right: none !important;
+}
+
+.el-table--border .el-table__inner-wrapper::after {
+  display: none;
+}
+
+.el-table__border-left-patch,
+.el-table__border-bottom-patch {
+  display: none;
+}
+
+.el-table--border::after {
+  display: none;
+}
+
+.el-table--border .el-table__inner-wrapper {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--card-bg);
+}
+
+/* ============================================
+   卡片 - 企业风格
+   ============================================ */
+.el-card {
+  border-radius: var(--card-radius);
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+  transition: none;
+}
+
+.el-card:hover {
+  box-shadow: var(--card-shadow-hover);
+}
+
+.el-card__header {
+  border-bottom: 1px solid var(--card-border);
+  padding: var(--spacing-lg) var(--spacing-xl);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  background: var(--color-fill-secondary);
+}
+
+.el-card__body {
+  padding: var(--spacing-xl);
+}
+
+/* ============================================
+   标签 - 企业风格
+   ============================================ */
+.el-tag {
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  padding: 0 8px;
+  font-size: var(--font-size-xs);
+}
+
+.el-tag--success.el-tag--light {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-color: var(--color-success-border);
+}
+
+.el-tag--danger.el-tag--light {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border-color: var(--color-error-border);
+}
+
+.el-tag--warning.el-tag--light {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border-color: var(--color-warning-border);
+}
+
+.el-tag--primary.el-tag--light,
+.el-tag--info.el-tag--light {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+}
+
+/* ============================================
+   标签页 - 简洁线条风格
+   ============================================ */
+.el-tabs--border-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+
+.el-tabs--border-card > .el-tabs__header {
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--card-border);
+  padding: 0 var(--spacing-lg);
+}
+
+.el-tabs--border-card > .el-tabs__header .el-tabs__item {
+  border-radius: 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  padding: var(--spacing-md) var(--spacing-lg);
+  margin-bottom: -1px;
+  transition: none;
+  color: var(--color-text-secondary);
+}
+
+.el-tabs--border-card > .el-tabs__header .el-tabs__item.is-active {
+  background: transparent;
+  border-bottom: 2px solid var(--color-primary);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.el-tabs--border-card > .el-tabs__header .el-tabs__item:hover {
+  color: var(--color-primary);
+  background: transparent;
+}
+
+/* 顶部标签页样式 */
+.el-tabs--top.el-tabs--border-card > .el-tabs__header .el-tabs__nav {
+  border: none;
+}
+
+.el-tabs--border-card > .el-tabs__content {
+  padding: var(--spacing-xl);
+}
+
+/* ============================================
+   对话框 - 企业风格
+   ============================================ */
+.el-overlay {
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.el-dialog {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+}
+
+.el-dialog__header {
+  padding: var(--spacing-lg) var(--spacing-xl);
+  border-bottom: 1px solid var(--card-border);
+  background: var(--color-fill-secondary);
+}
+
+.el-dialog__title {
+  font-weight: 600;
+  font-size: var(--font-size-lg);
+  color: var(--color-text-primary);
+}
+
+.el-dialog__body {
+  padding: var(--spacing-xl);
+}
+
+.el-dialog__footer {
+  padding: var(--spacing-lg) var(--spacing-xl);
+  border-top: 1px solid var(--card-border);
+  background: var(--color-fill-secondary);
+}
+
+/* ============================================
+   消息框
+   ============================================ */
+.el-message-box {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-xl);
+}
+
+.el-message {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ============================================
+   分页器 - 企业风格
+   ============================================ */
+.el-pagination {
+  --el-pagination-button-bg-color: var(--card-bg);
+}
+
+.el-pagination .el-pager li {
+  border-radius: var(--radius-sm);
+  transition: none;
+  border: 1px solid transparent;
+}
+
+.el-pagination .el-pager li.is-active {
+  background: var(--color-primary);
+  color: white;
+  border-radius: var(--radius-sm);
+}
+
+.el-pagination .el-pager li:hover:not(.is-active) {
+  background: var(--color-fill-secondary);
+  border-color: var(--color-border);
+}
+
+/* ============================================
+   开关
+   ============================================ */
+.el-switch {
+  --el-switch-on-color: var(--color-primary);
+}
+
+.el-switch.is-checked .el-switch__core {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+/* ============================================
+   下拉菜单 - 企业风格
+   ============================================ */
+.el-dropdown-menu {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-lg);
+  padding: var(--spacing-xs);
+}
+
+.el-dropdown-menu__item {
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  transition: none;
+}
+
+.el-dropdown-menu__item:hover {
+  background: var(--color-fill-secondary);
+  color: var(--color-primary);
+}
+
+/* ============================================
+   警告/通知
+   ============================================ */
+.el-alert {
+  border-radius: var(--radius-md);
+}
+
+.el-notification {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ============================================
+   抽屉 - 企业风格
+   ============================================ */
+.el-drawer {
+  background: var(--card-bg);
+}
+
+.el-drawer__header {
+  border-bottom: 1px solid var(--card-border);
+  padding: var(--spacing-lg) var(--spacing-xl);
+  margin-bottom: 0;
+  background: var(--color-fill-secondary);
+}
+
+.el-drawer__body {
+  padding: var(--spacing-xl);
+}
+
+/* ============================================
+   表单
+   ============================================ */
+.el-form-item__label {
+  color: var(--color-text-primary) !important;
+  font-weight: 500;
+}
+
+.el-form-item__error {
+  padding-top: 4px;
+}
+
+.el-form-item__content {
+  color: var(--color-text-primary);
+}
+
+/* ============================================
+   全局字体颜色强制统一
+   ============================================ */
+.el-input__inner,
+.el-textarea__inner,
+.el-select__input {
+  color: var(--color-text-primary) !important;
+}
+
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder {
+  color: var(--color-text-quaternary) !important;
+}
+
+.el-descriptions__label {
+  color: var(--color-text-secondary) !important;
+}
+
+.el-descriptions__content {
+  color: var(--color-text-primary) !important;
+}
+
+.el-statistic__head {
+  color: var(--color-text-secondary) !important;
+}
+
+.el-statistic__content {
+  color: var(--color-text-primary) !important;
+}
+
+.el-empty__description {
+  color: var(--color-text-tertiary) !important;
+}
+
+.el-result__title {
+  color: var(--color-text-primary) !important;
+}
+
+.el-result__subtitle {
+  color: var(--color-text-secondary) !important;
+}
+
+.el-breadcrumb__inner {
+  color: var(--color-text-tertiary) !important;
+}
+
+.el-breadcrumb__item:last-child .el-breadcrumb__inner {
+  color: var(--color-text-primary) !important;
+}
+
+/* ============================================
+   树形控件
+   ============================================ */
+.el-tree {
+  background: transparent;
+}
+
+.el-tree-node__content {
+  border-radius: var(--radius-sm);
+  transition: none;
+}
+
+.el-tree-node__content:hover {
+  background: var(--color-fill-secondary);
+}
+
+.el-tree-node.is-current > .el-tree-node__content {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+
+/* ============================================
+   徽章
+   ============================================ */
+.el-badge__content {
+  border-radius: var(--radius-full);
+}
+
+/* ============================================
+   进度条
+   ============================================ */
+.el-progress-bar__outer {
+  border-radius: var(--radius-full);
+  background: var(--color-fill-secondary);
+}
+
+.el-progress-bar__inner {
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+}
+
+/* ============================================
+   步骤条
+   ============================================ */
+.el-step__head.is-finish .el-step__icon {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+/* ============================================
+   通用工具类
+   ============================================ */
+.text-primary { color: var(--color-text-primary); }
+.text-secondary { color: var(--color-text-secondary); }
+.text-tertiary { color: var(--color-text-tertiary); }
+.text-success { color: var(--color-success); }
+.text-warning { color: var(--color-warning); }
+.text-error { color: var(--color-error); }
+.text-brand { color: var(--color-primary); }
+
+/* ============================================
+   页面容器通用
+   ============================================ */
+.page-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xl);
+  min-width: 0;
+  animation: fadeIn 0.3s var(--ease-out);
+}
+
+/* ============================================
+   全局自适应修复
+   ============================================ */
+.el-card__body {
+  min-width: 0;
+}
+
+[class*="-page"],
+[class*="-container"] {
+  min-width: 0;
+  background: var(--page-bg);
+  min-height: 100%;
+}
+
+.el-table {
+  width: 100% !important;
+}
+
+/* ============================================
+   页面切换动画 - 克制版
+   ============================================ */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ============================================
+   滚动条美化
+   ============================================ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}
+
+/* ============================================
+   选中文本颜色
+   ============================================ */
+::selection {
+  background: rgba(59, 130, 246, 0.2);
+  color: var(--color-primary);
+}
+
+/* ============================================
+   页面自适应宽度 - 所有管理页面
+   ============================================ */
+.settings-page,
+.upstream-page,
+.downstream-page,
+.sync-page,
+.security-page,
+.users-page,
+.roles-page,
+.notify-page,
+.template-page,
+.ldap-page,
+.proxy-page,
+.api-logs-page,
+.log-settings-page,
+.connectors-page,
+.dingtalk-page,
+.api-docs-page,
+.profile-page {
+  width: 100%;
+}
+
+[class*="-page"] .el-tabs {
+  width: 100%;
+}
+
+[class*="-page"] .el-card {
+  width: 100%;
+}
+
+[class*="-page"] .el-form {
+  width: 100%;
+}
+
+.config-form {
+  width: 100%;
+  max-width: none;
+}
+
+.config-card {
+  width: 100%;
+}
+
+/* ============================================
+   全局文字颜色统一规范
+   确保所有页面文字颜色一致
+   ============================================ */
+
+/* 标题文字 - 深色主文字 */
+.card-title,
+.section-title,
+.stat-value,
+.ring-value,
+.service-name,
+.net-value,
+.page-title,
+[class*="-title"],
+.el-card__header span,
+.el-dialog__title,
+.el-drawer__title {
+  color: var(--color-text-primary) !important;
+}
+
+/* 标签文字 - 次要灰色 */
+.stat-label,
+.card-detail,
+.service-status,
+.header-desc,
+.tab-desc,
+[class*="-label"],
+[class*="-desc"] {
+  color: var(--color-text-tertiary) !important;
+}
+
+/* 表格单元格文字 */
+.el-table__cell {
+  color: var(--color-text-primary);
+}
+
+.el-table .cell {
+  color: inherit;
+}
+
+/* 描述列表 */
+.el-descriptions__label.el-descriptions__cell {
+  color: var(--color-text-secondary) !important;
+  background: var(--color-fill-secondary) !important;
+}
+
+.el-descriptions__content.el-descriptions__cell {
+  color: var(--color-text-primary) !important;
+}
+
+/* 数值文字加粗 */
+.stat-value,
+.ring-value,
+.net-value {
+  font-weight: 600;
+}
+
+/* 链接按钮 */
+.el-button--text,
+.el-button.is-link {
+  color: var(--color-primary) !important;
+}
+
+.el-button--text:hover,
+.el-button.is-link:hover {
+  color: var(--color-primary-hover) !important;
+}
+
+/* 刷新按钮等文字按钮 */
+.el-button--primary.is-text,
+.el-button--primary.is-link {
+  color: var(--color-primary) !important;
+}
+
+/* 空状态文字 */
+.el-empty__description p {
+  color: var(--color-text-tertiary) !important;
+}
+
+/* 表格内文字 */
+.row-name {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.text-muted {
+  color: var(--color-text-quaternary) !important;
+}
+
+.conn-addr {
+  color: var(--color-text-secondary);
+}
+

@@ -1,0 +1,321 @@
+/* ============================================
+   Corporate 工具类和动效系统
+   企业风格设计系统
+   ============================================ */
+
+/* ============================================
+   卡片效果类
+   ============================================ */
+
+/* 基础卡片 */
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+}
+
+/* 悬停卡片 */
+.card-hover {
+  transition: none;
+}
+
+.card-hover:hover {
+  box-shadow: var(--card-shadow-hover);
+}
+
+/* 高亮卡片 */
+.card-elevated {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-lg);
+}
+
+/* 内容面板 */
+.panel {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-xl);
+}
+
+/* ============================================
+   悬停效果类 - 克制版
+   ============================================ */
+
+/* 仅阴影变化 */
+.hover-shadow {
+  transition: none;
+}
+
+.hover-shadow:hover {
+  box-shadow: var(--card-shadow-hover);
+}
+
+/* 背景色变化 */
+.hover-bg {
+  transition: none;
+}
+
+.hover-bg:hover {
+  background-color: var(--color-fill-secondary);
+}
+
+/* 边框色变化 */
+.hover-border {
+  transition: none;
+}
+
+.hover-border:hover {
+  border-color: var(--color-primary);
+}
+
+/* ============================================
+   状态背景色
+   ============================================ */
+
+.bg-primary { background-color: var(--color-primary); }
+.bg-primary-light { background-color: var(--color-primary-bg); }
+.bg-success { background-color: var(--color-success); }
+.bg-success-light { background-color: var(--color-success-bg); }
+.bg-warning { background-color: var(--color-warning); }
+.bg-warning-light { background-color: var(--color-warning-bg); }
+.bg-error { background-color: var(--color-error); }
+.bg-error-light { background-color: var(--color-error-bg); }
+.bg-fill { background-color: var(--color-fill-secondary); }
+
+/* ============================================
+   渐变效果类
+   ============================================ */
+
+/* 主渐变背景 */
+.gradient-primary {
+  background: var(--gradient-primary);
+}
+
+.gradient-header {
+  background: var(--gradient-header);
+}
+
+.gradient-success {
+  background: var(--gradient-success);
+}
+
+.gradient-warning {
+  background: var(--gradient-warning);
+}
+
+.gradient-danger {
+  background: var(--gradient-danger);
+}
+
+/* ============================================
+   动画效果 - 已禁用
+   ============================================ */
+
+.animate-fade-in,
+.animate-fade-in-up,
+.animate-scale-in {
+  animation: none !important;
+}
+
+/* ============================================
+   状态指示器
+   ============================================ */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.status-dot.online {
+  background: var(--color-success);
+}
+
+.status-dot.offline {
+  background: var(--color-text-quaternary);
+}
+
+.status-dot.warning {
+  background: var(--color-warning);
+}
+
+.status-dot.error {
+  background: var(--color-error);
+}
+
+/* 状态徽章 */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+}
+
+.status-badge.online {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-badge.offline {
+  background: var(--color-fill-secondary);
+  color: var(--color-text-tertiary);
+}
+
+.status-badge.warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.status-badge.error {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+/* ============================================
+   加载状态
+   ============================================ */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-fill-secondary) 25%,
+    var(--color-fill-quaternary) 50%,
+    var(--color-fill-secondary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s linear infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ============================================
+   分隔线
+   ============================================ */
+.divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: var(--spacing-lg) 0;
+}
+
+.divider-vertical {
+  width: 1px;
+  background: var(--color-border);
+  margin: 0 var(--spacing-md);
+  align-self: stretch;
+}
+
+/* ============================================
+   遮罩
+   ============================================ */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  z-index: 999;
+}
+
+/* ============================================
+   响应式隐藏/显示
+   ============================================ */
+@media (max-width: 768px) {
+  .hide-mobile { display: none !important; }
+}
+
+@media (min-width: 769px) {
+  .hide-desktop { display: none !important; }
+}
+
+/* ============================================
+   减少动画（无障碍）
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ============================================
+   间距工具类
+   ============================================ */
+.mt-0 { margin-top: 0; }
+.mt-1 { margin-top: var(--spacing-xs); }
+.mt-2 { margin-top: var(--spacing-sm); }
+.mt-3 { margin-top: var(--spacing-md); }
+.mt-4 { margin-top: var(--spacing-lg); }
+.mt-5 { margin-top: var(--spacing-xl); }
+
+.mb-0 { margin-bottom: 0; }
+.mb-1 { margin-bottom: var(--spacing-xs); }
+.mb-2 { margin-bottom: var(--spacing-sm); }
+.mb-3 { margin-bottom: var(--spacing-md); }
+.mb-4 { margin-bottom: var(--spacing-lg); }
+.mb-5 { margin-bottom: var(--spacing-xl); }
+
+.p-0 { padding: 0; }
+.p-1 { padding: var(--spacing-xs); }
+.p-2 { padding: var(--spacing-sm); }
+.p-3 { padding: var(--spacing-md); }
+.p-4 { padding: var(--spacing-lg); }
+.p-5 { padding: var(--spacing-xl); }
+
+/* ============================================
+   Flex 工具类
+   ============================================ */
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.flex-wrap { flex-wrap: wrap; }
+.items-center { align-items: center; }
+.items-start { align-items: flex-start; }
+.items-end { align-items: flex-end; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.justify-end { justify-content: flex-end; }
+.gap-1 { gap: var(--spacing-xs); }
+.gap-2 { gap: var(--spacing-sm); }
+.gap-3 { gap: var(--spacing-md); }
+.gap-4 { gap: var(--spacing-lg); }
+.gap-5 { gap: var(--spacing-xl); }
+.flex-1 { flex: 1; }
+
+/* ============================================
+   文本工具类
+   ============================================ */
+.font-medium { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+.text-xs { font-size: var(--font-size-xs); }
+.text-sm { font-size: var(--font-size-sm); }
+.text-base { font-size: var(--font-size-base); }
+.text-lg { font-size: var(--font-size-lg); }
+.text-xl { font-size: var(--font-size-xl); }
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================
+   圆角工具类
+   ============================================ */
+.rounded-sm { border-radius: var(--radius-sm); }
+.rounded { border-radius: var(--radius-md); }
+.rounded-lg { border-radius: var(--radius-lg); }
+.rounded-xl { border-radius: var(--radius-xl); }
+.rounded-full { border-radius: var(--radius-full); }
+

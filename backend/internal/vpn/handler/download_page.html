@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VPN Client</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:#f0f2f5;color:#1f2937;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 20px}
+.wrap{width:100%;max-width:1200px}
+h1{text-align:center;font-size:2rem;font-weight:700;margin-bottom:6px}
+h1 span{color:#0070c9}
+.sub{text-align:center;color:#9ca3af;font-size:.9rem;margin-bottom:36px}
+.clients{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-bottom:40px}
+.card{background:#fff;border-radius:14px;padding:28px 18px 24px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.06);transition:box-shadow .2s,transform .2s}
+.card:hover{box-shadow:0 6px 24px rgba(0,0,0,.1);transform:translateY(-2px)}
+.icon{font-size:2.2rem;margin-bottom:12px;line-height:1}
+.icon svg{width:36px;height:36px;vertical-align:middle}
+.card h3{font-size:.95rem;font-weight:600;margin-bottom:2px}
+.card .desc{color:#9ca3af;font-size:.75rem;margin-bottom:18px}
+.btn{display:inline-flex;align-items:center;gap:4px;padding:9px 22px;border-radius:9px;font-size:.84rem;font-weight:500;border:none;cursor:pointer;transition:background .2s;text-decoration:none;color:#fff;background:#0070c9}
+.btn:hover{background:#005ca8}
+.guide{background:#fff;border-radius:14px;padding:28px 28px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.guide h3{font-size:1.05rem;font-weight:700;margin-bottom:20px;color:#111827}
+.steps{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.st{display:flex;gap:12px;padding:14px;border-radius:10px;background:#f9fafb}
+.sn{width:28px;height:28px;background:#eff6ff;color:#0070c9;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0}
+.st h4{font-size:.84rem;font-weight:600;margin-bottom:2px}
+.st p{font-size:.78rem;color:#6b7280;line-height:1.5}
+.st code{background:#eff6ff;color:#0070c9;padding:1px 5px;border-radius:4px;font-size:.74rem}
+.ft{text-align:center;color:#d1d5db;font-size:.72rem;margin-top:24px}
+.mm{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;align-items:center;justify-content:center;padding:20px}
+.mm.ac{display:flex}
+.md{background:#fff;border-radius:14px;width:100%;max-width:440px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.15);animation:mi .18s ease}
+@keyframes mi{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+.mh{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 14px}
+.mh h3{font-size:1.05rem;font-weight:700}
+.mc{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:7px;border:none;background:#fee2e2;color:#dc2626;cursor:pointer;font-size:.85rem}
+.mc:hover{background:#fecaca}
+.mb{padding:0 22px 22px}
+.di{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-radius:8px;transition:background .15s;cursor:pointer;text-decoration:none;color:inherit}
+.di:hover{background:#f0f5ff}
+.di .dn{font-size:.86rem;color:#1f2937;font-weight:500}
+.di .dc{font-size:.95rem;color:#0070c9}
+.dd{height:1px;background:#f3f4f6;margin:0 14px}
+/* 大屏放大 */
+@media(min-width:1600px){
+  h1{font-size:2.8rem}
+  .sub{font-size:1.05rem;margin-bottom:48px}
+  .clients{gap:22px;margin-bottom:52px}
+  .card{padding:40px 24px 34px;border-radius:18px}
+  .icon{font-size:2.8rem;margin-bottom:16px}
+  .icon svg{width:48px;height:48px}
+  .card h3{font-size:1.15rem}
+  .card .desc{font-size:.85rem;margin-bottom:22px}
+  .btn{padding:12px 28px;font-size:.95rem;border-radius:11px}
+  .guide{padding:36px 36px;border-radius:18px}
+  .guide h3{font-size:1.2rem;margin-bottom:24px}
+  .steps{gap:16px}
+  .st{padding:18px;border-radius:12px}
+  .sn{width:34px;height:34px;font-size:.92rem}
+  .st h4{font-size:.95rem}
+  .st p{font-size:.86rem}
+}
+/* 手机端 */
+@media(max-width:768px){
+  .steps{grid-template-columns:1fr}
+}
+@media(max-width:560px){
+  body{padding:20px 14px}
+  .clients{grid-template-columns:repeat(2,1fr)}
+  h1{font-size:1.5rem}
+  .sub{font-size:.82rem;margin-bottom:24px}
+}
+@media(max-width:380px){
+  .clients{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Cisco <span>Secure Client</span></h1>
+<p class="sub">下载适合您设备的客户端，安全接入企业网络</p>
+<div class="clients">
+<div class="card"><div class="icon"><svg viewBox="0 0 24 24" fill="#0078d4"><path d="M3 12V6.5l8-1.1V12H3zm0 .5h8v6.6l-8-1.1V12.5zM11.5 5.3l9-1.3v8.5h-9V5.3zm0 7.7h9v8.5l-9-1.3V13z"/></svg></div><h3>Windows</h3><p class="desc">Win 7+</p><a href="/files/anyconnect-win.msi" class="btn">&#x2B07; 下载</a></div>
+<div class="card"><div class="icon"><svg viewBox="0 0 24 24" fill="#555"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg></div><h3>macOS</h3><p class="desc">10.13+</p><button class="btn" onclick="O('macos')">&#x2B07; 下载</button></div>
+<div class="card"><div class="icon">&#x1F427;</div><h3>Linux</h3><p class="desc">主流发行版</p><button class="btn" onclick="O('linux')">&#x2B07; 下载</button></div>
+<div class="card"><div class="icon">&#x1F4F1;</div><h3>iOS</h3><p class="desc">iPhone / iPad</p><a href="https://apps.apple.com/cn/app/cisco-secure-client/id1135064690" target="_blank" class="btn">&#x2197; App Store</a></div>
+<div class="card"><div class="icon">&#x1F4F2;</div><h3>Android</h3><p class="desc">5.0+</p><a href="/files/anyconnect-android.apk" class="btn">&#x2B07; 下载</a></div>
+</div>
+<div class="guide"><h3>快速连接指南</h3><div class="steps">
+<div class="st"><div class="sn">1</div><div><h4>下载安装</h4><p>选择对应系统版本下载并安装。</p></div></div>
+<div class="st"><div class="sn">2</div><div><h4>打开客户端</h4><p>在应用中找到 <code>Cisco Secure Client</code> 并打开。</p></div></div>
+<div class="st"><div class="sn">3</div><div><h4>输入服务器地址</h4><p>输入管理员提供的 VPN 地址，点击连接。</p></div></div>
+<div class="st"><div class="sn">4</div><div><h4>登录验证</h4><p>输入账号密码完成登录，即可访问内部资源。</p></div></div>
+</div></div>
+<div class="ft">Cisco Secure Client</div>
+</div>
+<div class="mm" id="m-macos" onclick="if(event.target===this)C('macos')"><div class="md"><div class="mh"><h3>macOS 下载</h3><button class="mc" onclick="C('macos')">&#x2716;</button></div><div class="mb">
+<a class="di" href="/files/macos/anyconnect-macos-intel.dmg"><span class="dn">Intel 芯片版</span><span class="dc">&#x2B07;</span></a><div class="dd"></div>
+<a class="di" href="/files/macos/cisco-secure-client-macos-silicon.dmg"><span class="dn">Apple Silicon (M1/M2/M3/M4)</span><span class="dc">&#x2B07;</span></a><div class="dd"></div>
+<a class="di" href="https://apps.apple.com/cn/app/cisco-secure-client/id1135064690" target="_blank"><span class="dn">App Store 版本</span><span class="dc">&#x2197;</span></a>
+</div></div></div>
+<div class="mm" id="m-linux" onclick="if(event.target===this)C('linux')"><div class="md"><div class="mh"><h3>Linux 下载</h3><button class="mc" onclick="C('linux')">&#x2716;</button></div><div class="mb">
+<a class="di" href="/files/linux/cisco-secure-client-amd64-deb.tgz"><span class="dn">AMD64 (Debian/Ubuntu)</span><span class="dc">&#x2B07;</span></a><div class="dd"></div>
+<a class="di" href="/files/linux/cisco-secure-client-amd64-rpm.tgz"><span class="dn">AMD64 (RedHat/CentOS)</span><span class="dc">&#x2B07;</span></a><div class="dd"></div>
+<a class="di" href="/files/linux/cisco-secure-client-arm64-deb.tgz"><span class="dn">ARM64 (Debian/Ubuntu)</span><span class="dc">&#x2B07;</span></a><div class="dd"></div>
+<a class="di" href="/files/linux/cisco-secure-client-arm64-rpm.tgz"><span class="dn">ARM64 (RedHat/CentOS)</span><span class="dc">&#x2B07;</span></a><div class="dd"></div>
+<a class="di" href="/files/linux/cisco-secure-client-amd64-other.tgz"><span class="dn">AMD64 Other</span><span class="dc">&#x2B07;</span></a><div class="dd"></div>
+<a class="di" href="/files/linux/cisco-secure-client-arm64-other.tgz"><span class="dn">ARM64 Other</span><span class="dc">&#x2B07;</span></a>
+</div></div></div>
+<script>function O(p){document.getElementById('m-'+p).classList.add('ac')}function C(p){document.getElementById('m-'+p).classList.remove('ac')}document.addEventListener('keydown',function(e){if(e.key==='Escape'){C('macos');C('linux')}});</script>
+</body>
+</html>

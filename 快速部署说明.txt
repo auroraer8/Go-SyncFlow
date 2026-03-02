@@ -1,0 +1,52 @@
+==========================================
+    Go-SyncFlow 统一身份同步与管理平台
+          快速部署指南
+==========================================
+
+系统要求：
+- Linux系统（Ubuntu 20.04+ / CentOS 7+）
+- 至少2GB内存
+- 至少10GB磁盘空间
+- root权限
+
+一键部署步骤：
+1. 解压文件到目标目录（建议 /opt/）
+   tar -xzf go-syncflow-XXXXXX.tar.gz -C /opt/
+
+2. 进入项目目录
+   cd /opt/Go-SyncFlow
+
+3. 运行一键启动脚本
+   chmod +x scripts/*.sh
+   ./scripts/start.sh
+
+4. 访问系统
+   HTTP:  http://服务器IP:8080
+   HTTPS: https://服务器IP:8443
+
+默认管理员账号：
+   用户名: admin
+   密码:   Admin@2024
+
+停止服务：
+   ./scripts/stop.sh
+
+重启服务：
+   ./scripts/stop.sh && ./scripts/start.sh
+
+重置管理员密码：
+   ./scripts/reset-admin.sh [新密码]
+
+查看服务状态：
+   systemctl status go-syncflow
+
+查看日志：
+   journalctl -u go-syncflow -f
+
+==========================================
+说明：
+- LDAP 服务默认启用 Samba 属性支持
+- 可直接对接群晖 NAS 的 LDAP 认证
+- 通知渠道、同步连接器等需在界面中配置
+- 数据库初始为空，首次启动自动初始化
+==========================================

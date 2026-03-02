@@ -1,0 +1,58 @@
+# ========================================
+# Go-SyncFlow .gitignore
+# ========================================
+
+# ---------- 编译产物 ----------
+backend/go-syncflow
+backend/bi-dashboard-bin
+backend/bi-dashboard-run
+backend/static/
+
+# 前端编译产物
+frontend/dist/
+
+# ---------- 依赖 ----------
+frontend/node_modules/
+
+# ---------- 运行时数据 ----------
+# PostgreSQL 数据与二进制
+pgdata/
+postgres/
+
+# 应用运行时数据（密钥、证书、VPN 配置）
+data/
+backend/data/
+backend/data_backup_*/
+backend/certs/
+
+# ---------- 工具包 ----------
+tooling/
+
+# ---------- 打包与传输文件 ----------
+*.tar.gz
+root@*
+
+# ---------- 文档（排除开发文档和 PDF） ----------
+docs/*.pdf
+docs/generate-pdf.sh
+docs/template.tex
+docs/VPN集成代码指南.md
+docs/VPN集成开发文档.md
+docs/技术架构文档.md
+docs/功能文档.md
+docs/第三方应用权限管理开发文档.md
+docs/连接器与属性映射增强开发文档.md
+docs/第三方系统接口权限接入指南.md
+docs/third_party_api_auth_guide.md
+docs/ThirdParty-API-SSO-Auth.md
+docs/GitLab上传指南.md
+docs/vpn-landing-page-sample.html
+
+# ---------- IDE / OS ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
