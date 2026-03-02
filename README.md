@@ -114,7 +114,7 @@ Go-SyncFlow/
 ### 一键安装
 
 ```bash
-tar -xzf go-syncflow-v3.5-YYYYMMDD.tar.gz -C /opt/
+tar -xzf go-syncflow-v3.5.tar.gz -C /opt/
 cd /opt/Go-SyncFlow && chmod +x scripts/*.sh
 ./scripts/start.sh
 ```
