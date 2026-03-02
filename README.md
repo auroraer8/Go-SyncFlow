@@ -171,6 +171,10 @@ journalctl -u go-syncflow -f  # 查看实时日志
 - 通知渠道、同步连接器、SSO 应用等需在管理界面中配置
 - VPN 443 端口自带客户端下载页面及安装包
 
+## 致谢
+
+本项目的 VPN 模块基于 [AnyLink](https://github.com/bjdgyc/anylink) 开源项目进行开发，感谢 AnyLink 项目及其贡献者的出色工作。
+
 ## 开源协议
 
 本项目采用 [AGPL-3.0](LICENSE) 协议开源。
@@ -179,3 +183,9 @@ journalctl -u go-syncflow -f  # 查看实时日志
 - 如果您修改了代码并通过网络提供服务，必须公开修改后的源码
 - 所有衍生作品必须同样采用 AGPL-3.0 协议
 - 详见 [LICENSE](LICENSE) 文件
+
+### 第三方开源组件
+
+| 组件 | 协议 | 用途 |
+|------|------|------|
+| [AnyLink](https://github.com/bjdgyc/anylink) | AGPL-3.0 | VPN 远程接入模块（基于 OpenConnect 协议，兼容 AnyConnect 客户端） |
