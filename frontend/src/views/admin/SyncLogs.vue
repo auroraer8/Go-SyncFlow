@@ -189,11 +189,15 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { onMounted, onUnmounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { Filter, Download } from "@element-plus/icons-vue";
 import { logApi } from "../../api";
+import { useWebSocketStore } from "../../store/websocket";
 import * as XLSX from 'xlsx';
+
+const wsStore = useWebSocketStore();
+let wsUnsubscribe: (() => void) | null = null;
 
 const loading = ref(false);
 const exporting = ref(false);
@@ -294,7 +298,28 @@ const downloadExcel = (data: any[]) => {
   XLSX.writeFile(wb, `同步日志_${new Date().toISOString().slice(0, 10)}.xlsx`);
 };
 
-onMounted(loadLogs);
+onMounted(() => {
+  loadLogs();
+  
+  // 订阅同步日志事件（实时刷新）
+  wsStore.connect();
+  wsUnsubscribe = wsStore.subscribe('sync_log', (data) => {
+    console.log('[同步日志] 收到新同步日志:', data);
+    // 如果在第一页且没有筛选条件，直接将新日志添加到列表顶部
+    if (pagination.page === 1 && !filters.direction && !filters.event && !filters.status && !filters.keyword) {
+      logs.value.unshift(data);
+      pagination.total++;
+      // 保持列表长度不超过 pageSize
+      if (logs.value.length > pagination.size) {
+        logs.value.pop();
+      }
+    }
+  });
+});
+
+onUnmounted(() => {
+  if (wsUnsubscribe) wsUnsubscribe();
+});
 </script>
 
 <style scoped>

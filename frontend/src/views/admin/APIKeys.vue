@@ -25,13 +25,13 @@
 
     <!-- 列表 -->
     <el-table :data="tableData" v-loading="loading" stripe class="modern-table" empty-text="暂无 API 密钥">
-      <el-table-column label="名称" min-width="160">
+      <el-table-column label="名称" min-width="140">
         <template #default="{ row }">
           <div class="key-name">{{ row.name }}</div>
           <div class="key-desc" v-if="row.description">{{ row.description }}</div>
         </template>
       </el-table-column>
-      <el-table-column prop="appId" label="AppID" width="200">
+      <el-table-column label="AppID" width="140">
         <template #default="{ row }">
           <code class="app-id">{{ row.appId }}</code>
           <el-button link size="small" @click="copyText(row.appId)" style="margin-left: 4px">
@@ -39,50 +39,43 @@
           </el-button>
         </template>
       </el-table-column>
-      <el-table-column label="AppKey" width="140">
+      <el-table-column label="AppKey" width="120">
         <template #default="{ row }">
           <code class="app-key-hint">{{ row.appKeyHint }}</code>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="100" align="center">
+      <el-table-column label="状态" width="80" align="center">
         <template #default="{ row }">
           <el-tag v-if="row.isExpired" type="info" size="small">已过期</el-tag>
           <el-tag v-else :type="row.isActive ? 'success' : 'danger'" size="small">
-            {{ row.isActive ? '已启用' : '已禁用' }}
+            {{ row.isActive ? '启用' : '禁用' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="IP限制" width="100" align="center">
+      <el-table-column label="权限" width="100" align="center">
         <template #default="{ row }">
-          <template v-if="(row.ipWhiteList && row.ipWhiteList.length) || (row.ipBlackList && row.ipBlackList.length)">
-            <el-tooltip :content="formatIPInfo(row)" placement="top">
-              <el-tag size="small" type="warning">已配置</el-tag>
+          <template v-if="row.permissionList && row.permissionList.length > 0">
+            <el-tooltip :content="row.permissionList.join(', ')" placement="top">
+              <el-tag size="small" type="info">{{ row.permissionList.length }} 项</el-tag>
             </el-tooltip>
           </template>
           <span v-else class="text-muted">无限制</span>
         </template>
       </el-table-column>
-      <el-table-column label="调用次数" width="100" align="center">
+      <el-table-column label="调用/最后使用" min-width="140">
         <template #default="{ row }">
-          <span class="usage-count">{{ formatNumber(row.usageCount) }}</span>
+          <div>调用 {{ formatNumber(row.usageCount) }} 次</div>
+          <div class="last-used text-muted" v-if="row.lastUsedAt">{{ formatTime(row.lastUsedAt) }}</div>
+          <div class="text-muted" v-else>未使用</div>
         </template>
       </el-table-column>
-      <el-table-column label="最后使用" width="160">
-        <template #default="{ row }">
-          <template v-if="row.lastUsedAt">
-            <div class="last-used">{{ formatTime(row.lastUsedAt) }}</div>
-            <div class="last-ip" v-if="row.lastUsedIp">{{ row.lastUsedIp }}</div>
-          </template>
-          <span v-else class="text-muted">未使用</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="过期时间" width="120">
+      <el-table-column label="过期时间" width="110">
         <template #default="{ row }">
           <span v-if="row.expiresAt">{{ formatDate(row.expiresAt) }}</span>
           <span v-else class="text-muted">永不过期</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="180" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="showEdit(row)">编辑</el-button>
           <el-button link :type="row.isActive ? 'warning' : 'success'" size="small" @click="toggleStatus(row)">
@@ -126,6 +119,38 @@
             <div class="form-tip">密钥仅在创建时显示一次，请妥善保存</div>
           </el-form-item>
         </template>
+
+        <el-divider content-position="left">权限控制</el-divider>
+
+        <el-form-item label="API 权限">
+          <el-select
+            v-model="form.permissions"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            :max-collapse-tags="3"
+            placeholder="全部权限（不限制）"
+            style="width: 100%"
+            clearable
+          >
+            <el-option-group
+              v-for="group in permissionGroups"
+              :key="group.name"
+              :label="group.label"
+            >
+              <el-option
+                v-for="perm in group.permissions"
+                :key="perm.value"
+                :label="perm.label"
+                :value="perm.value"
+              >
+                <span>{{ perm.label }}</span>
+                <span style="float: right; color: #8492a6; font-size: 12px">{{ perm.value }}</span>
+              </el-option>
+            </el-option-group>
+          </el-select>
+          <div class="form-tip">留空表示不限制，可访问全部接口</div>
+        </el-form-item>
 
         <el-divider content-position="left">访问控制</el-divider>
 
@@ -254,11 +279,109 @@ const form = reactive({
   description: '',
   appId: '',
   appKey: '',
+  permissions: [] as string[],
   ipWhitelist: [] as string[],
   ipBlacklist: [] as string[],
   rateLimit: 60,
   expiresAt: '',
 });
+
+// 权限分组定义
+const permissionGroups = [
+  {
+    name: 'user',
+    label: '用户管理',
+    permissions: [
+      { value: 'user:read', label: '查看用户' },
+      { value: 'user:write', label: '创建/编辑用户' },
+      { value: 'user:delete', label: '删除用户' },
+    ]
+  },
+  {
+    name: 'group',
+    label: '用户组',
+    permissions: [
+      { value: 'group:read', label: '查看用户组' },
+      { value: 'group:write', label: '创建/编辑用户组' },
+      { value: 'group:delete', label: '删除用户组' },
+    ]
+  },
+  {
+    name: 'role',
+    label: '角色管理',
+    permissions: [
+      { value: 'role:read', label: '查看角色' },
+      { value: 'role:write', label: '创建/编辑角色' },
+      { value: 'role:delete', label: '删除角色' },
+    ]
+  },
+  {
+    name: 'sync',
+    label: '同步管理',
+    permissions: [
+      { value: 'sync:read', label: '查看连接器/规则' },
+      { value: 'sync:write', label: '创建/编辑连接器' },
+      { value: 'sync:execute', label: '触发同步' },
+      { value: 'sync:delete', label: '删除连接器' },
+    ]
+  },
+  {
+    name: 'sso',
+    label: 'SSO 应用',
+    permissions: [
+      { value: 'sso:read', label: '查看SSO应用' },
+      { value: 'sso:write', label: '创建/编辑SSO应用' },
+      { value: 'sso:delete', label: '删除SSO应用' },
+    ]
+  },
+  {
+    name: 'vpn',
+    label: 'VPN 管理',
+    permissions: [
+      { value: 'vpn:read', label: '查看VPN状态' },
+      { value: 'vpn:write', label: '管理VPN配置' },
+      { value: 'vpn:execute', label: '启停服务/踢人' },
+    ]
+  },
+  {
+    name: 'log',
+    label: '日志查看',
+    permissions: [
+      { value: 'log:read', label: '查看所有日志' },
+    ]
+  },
+  {
+    name: 'security',
+    label: '安全中心',
+    permissions: [
+      { value: 'security:read', label: '查看安全信息' },
+      { value: 'security:write', label: '管理安全配置' },
+    ]
+  },
+  {
+    name: 'settings',
+    label: '系统设置',
+    permissions: [
+      { value: 'settings:read', label: '查看设置' },
+      { value: 'settings:write', label: '修改设置' },
+    ]
+  },
+  {
+    name: 'notify',
+    label: '通知管理',
+    permissions: [
+      { value: 'notify:read', label: '查看通知渠道' },
+      { value: 'notify:write', label: '管理通知渠道' },
+    ]
+  },
+  {
+    name: 'auth',
+    label: '认证接口',
+    permissions: [
+      { value: 'auth:read', label: '用户认证验证' },
+    ]
+  },
+];
 
 const keyResult = reactive({
   appId: '',
@@ -272,6 +395,7 @@ const resetForm = () => {
   form.description = '';
   form.appId = '';
   form.appKey = '';
+  form.permissions = [];
   form.ipWhitelist = [];
   form.ipBlacklist = [];
   form.rateLimit = 60;
@@ -307,6 +431,14 @@ const showEdit = (row: any) => {
   editingId.value = row.id;
   form.name = row.name;
   form.description = row.description || '';
+  // 解析权限
+  let perms: string[] = [];
+  if (row.permissions) {
+    try {
+      perms = typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions;
+    } catch {}
+  }
+  form.permissions = row.permissionList || [];
   form.ipWhitelist = row.ipWhiteList || [];
   form.ipBlacklist = row.ipBlackList || [];
   form.rateLimit = row.rateLimit || 60;
@@ -321,10 +453,14 @@ const saveKey = async () => {
   }
   saving.value = true;
   try {
+    // 准备权限数据：全部权限时传空数组
+    const permissionsData = form.allPermissions ? [] : form.permissions;
+    
     if (editingId.value) {
       await api.put(`/apikeys/${editingId.value}`, {
         name: form.name,
         description: form.description,
+        permissions: permissionsData,
         ipWhitelist: form.ipWhitelist,
         ipBlacklist: form.ipBlacklist,
         rateLimit: form.rateLimit,
@@ -337,6 +473,7 @@ const saveKey = async () => {
         description: form.description,
         appId: form.appId || undefined,
         appKey: form.appKey || undefined,
+        permissions: permissionsData,
         ipWhitelist: form.ipWhitelist,
         ipBlacklist: form.ipBlacklist,
         rateLimit: form.rateLimit,
@@ -450,6 +587,31 @@ const formatIPInfo = (row: any) => {
   return parts.join(' | ');
 };
 
+const parsePermissions = (perms: any): string[] => {
+  if (!perms) return [];
+  if (Array.isArray(perms)) return perms;
+  try {
+    return JSON.parse(perms);
+  } catch {
+    return [];
+  }
+};
+
+const formatPermissions = (perms: any): string => {
+  const list = parsePermissions(perms);
+  if (list.length === 0) return '全部权限';
+  // 按资源分组显示
+  const grouped: Record<string, string[]> = {};
+  list.forEach(p => {
+    const [res, action] = p.split(':');
+    if (!grouped[res]) grouped[res] = [];
+    grouped[res].push(action);
+  });
+  return Object.entries(grouped)
+    .map(([res, actions]) => `${res}: ${actions.join('/')}`)
+    .join(', ');
+};
+
 onMounted(loadData);
 </script>
 
@@ -546,6 +708,12 @@ onMounted(loadData);
   font-size: 12px;
   color: #86909c;
   margin-top: 4px;
+}
+
+
+.permission-group-items .el-checkbox {
+  margin-right: 0;
+  height: 24px;
 }
 
 .ip-list-editor {

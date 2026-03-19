@@ -203,6 +203,10 @@
             <el-switch v-model="connForm.imEnableSso" />
             <span class="field-hint">允许用户通过该IM平台免登进入系统</span>
           </el-form-item>
+          <el-form-item label="扫码登录" v-if="connForm.imEnableSso && ['im_dingtalk', 'im_feishu', 'im_wechatwork'].includes(connForm.type)">
+            <el-switch v-model="connForm.imEnableQrLogin" />
+            <span class="field-hint">{{ getQrLoginHint(connForm.type) }}</span>
+          </el-form-item>
           <el-form-item label="SSO按钮文字" v-if="connForm.imEnableSso && connForm.type !== 'im_welink'">
             <el-input v-model="connForm.imSsoLabel" placeholder="如：钉钉登录" />
           </el-form-item>
@@ -859,6 +863,16 @@ const platformLabel = (type: string) => {
   };
   return map[type] || type;
 };
+
+// 获取扫码登录提示文字
+const getQrLoginHint = (type: string) => {
+  const hints: Record<string, string> = {
+    'im_dingtalk': '在网页登录页面显示钉钉扫码二维码（非钉钉内免登场景）',
+    'im_feishu': '在网页登录页面显示飞书扫码二维码（非飞书内免登场景）',
+    'im_wechatwork': '在网页登录页面显示企微扫码二维码（非企微内免登场景）'
+  };
+  return hints[type] || '';
+};
 const platformTagType = (type: string) => {
   if (type?.startsWith('im_')) return 'primary';
   if (type?.startsWith('db_')) return 'success';
@@ -898,7 +912,7 @@ const defaultConnForm = {
   imAppId: '', imAppSecret: '', imCorpId: '', imAgentId: '',
   imMatchField: 'mobile', imUsernameRule: 'pinyin',
   imAutoRegister: false, imGeneratePassword: true, imDefaultRoleId: 0,
-  imEnableSso: false, imSsoLabel: '', imSsoPriority: 0,
+  imEnableSso: false, imEnableQrLogin: false, imSsoLabel: '', imSsoPriority: 0,
   // LDAP 字段 - useTls 默认关闭，用户可手动开启
   host: '', port: 389, useTls: false,
   baseDn: '', bindDn: '', bindPassword: '', userFilter: '', upnSuffix: '',
@@ -953,6 +967,7 @@ const openConnDialog = (row?: any) => {
       imGeneratePassword: row.imGeneratePassword ?? true,
       imDefaultRoleId: row.imDefaultRoleId || 0,
       imEnableSso: row.imEnableSso ?? false,
+      imEnableQrLogin: row.imEnableQrLogin ?? false,
       imSsoLabel: row.imSsoLabel || '',
       imSsoPriority: row.imSsoPriority || 0,
       host: row.host || '', port: row.port || 389, useTls: row.useTls ?? false,

@@ -1,6 +1,6 @@
 # Go-SyncFlow - API 接口文档
 
-> 版本：v3.7 | 更新日期：2026-02-25
+> 版本：v3.6 | 更新日期：2026-03-14
 
 本文档面向开发者，描述 Go-SyncFlow 所有 API 接口规范与调用示例。
 
@@ -31,6 +31,50 @@
 | Content-Type | string | POST/PUT | application/json |
 
 > **安全说明**：系统仅支持请求头认证，不支持URL参数传递AppKey，避免密钥出现在URL、日志和浏览器历史中。
+
+#### API 权限控制
+
+创建 API 密钥时可以配置权限范围，限制密钥可访问的接口：
+
+| 权限格式 | 说明 |
+|----------|------|
+| `user:read` | 查看用户 |
+| `user:write` | 创建/编辑用户 |
+| `user:delete` | 删除用户 |
+| `group:read` | 查看用户组 |
+| `group:write` | 创建/编辑用户组 |
+| `role:read` | 查看角色 |
+| `role:write` | 创建/编辑角色 |
+| `sync:read` | 查看连接器/同步规则 |
+| `sync:write` | 创建/编辑连接器 |
+| `sync:execute` | 触发同步 |
+| `sso:read` | 查看 SSO 应用 |
+| `sso:write` | 管理 SSO 应用 |
+| `vpn:read` | 查看 VPN 状态 |
+| `vpn:write` | 管理 VPN 配置 |
+| `vpn:execute` | 启停服务/踢人 |
+| `log:read` | 查看日志 |
+| `security:read` | 查看安全信息 |
+| `security:write` | 管理安全配置 |
+| `settings:read` | 查看系统设置 |
+| `settings:write` | 修改系统设置 |
+| `notify:read` | 查看通知渠道 |
+| `notify:write` | 管理通知渠道 |
+| `auth:read` | 用户认证验证 |
+
+**权限匹配规则**：
+- 空权限列表 = 全部权限（不限制）
+- `write` 权限自动包含 `read`
+- 权限格式为 `资源:操作`
+
+**无权限错误响应**：
+
+```json
+{
+  "success": false,
+  "message": "API密钥无此权限: user:write"
+}
+```
 
 ---
 
@@ -1333,7 +1377,9 @@ POST /api/open/sync/trigger-all
 
 ## 17. API密钥管理接口
 
-
+> **安全限制**：API 密钥的创建、修改、删除、重置操作**只能通过管理后台界面执行**，不允许通过 API 操作。这是为了防止 API 密钥被滥用来创建更多密钥，确保系统安全。
+>
+> 通过 API 只能**查看** API 密钥列表和详情。
 
 ### 17.1 获取API密钥列表
 
@@ -1341,53 +1387,50 @@ POST /api/open/sync/trigger-all
 GET /api/open/apikeys
 ```
 
-### 17.2 创建API密钥
-
-```http
-POST /api/open/apikeys
-```
-
-**请求体**
-
-```json
-{
-  "name": "第三方系统集成",
-  "permissions": ["read", "write"],
-  "ipWhitelist": ["192.168.1.0/24"],
-  "expireAt": "2027-01-01T00:00:00Z"
-}
-```
-
 **响应**
 
 ```json
 {
   "success": true,
-  "data": {
-    "id": 1,
-    "appId": "app_xxx",
-    "appKey": "key_xxx_only_shown_once",
-    "name": "第三方系统集成"
-  }
+  "data": [
+    {
+      "id": 1,
+      "appId": "app_xxx",
+      "name": "第三方系统集成",
+      "isActive": true,
+      "createdAt": "2026-01-01T00:00:00Z",
+      "lastUsedAt": "2026-02-25T10:00:00Z",
+      "usageCount": 1250
+    }
+  ]
 }
 ```
 
-### 17.3 重置API密钥
+### 17.2 获取API密钥详情
 
 ```http
-POST /api/open/apikeys/:id/reset
+GET /api/open/apikeys/:id
 ```
 
-### 17.4 启用/禁用API密钥
+### 17.3 创建/修改/删除API密钥（仅管理后台）
 
-```http
-PUT /api/open/apikeys/:id/toggle
-```
+以下操作**仅限管理后台**，通过 API 调用会返回 403 错误：
 
-### 17.5 删除API密钥
+| 操作 | 方法 | 路径 | API 调用结果 |
+|------|------|------|-------------|
+| 创建密钥 | POST | /api/open/apikeys | ❌ 403 Forbidden |
+| 更新密钥 | PUT | /api/open/apikeys/:id | ❌ 403 Forbidden |
+| 重置密钥 | POST | /api/open/apikeys/:id/reset | ❌ 403 Forbidden |
+| 启用/禁用 | PUT | /api/open/apikeys/:id/toggle | ❌ 403 Forbidden |
+| 删除密钥 | DELETE | /api/open/apikeys/:id | ❌ 403 Forbidden |
 
-```http
-DELETE /api/open/apikeys/:id
+**错误响应示例**
+
+```json
+{
+  "success": false,
+  "message": "API 安全限制：不允许通过 API 创建、修改或删除 API 密钥，请在管理后台操作"
+}
 ```
 
 ---
@@ -1869,15 +1912,22 @@ curl -X GET "${BASE_URL}/api/open/sync/users?updated_after=2026-02-24T00:00:00Z"
 
 ### API密钥管理
 
+> **安全限制**：只允许 GET 请求查看，创建/修改/删除操作需在管理后台执行
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /api/open/apikeys | 获取API密钥列表 |
-| POST | /api/open/apikeys | 创建API密钥 |
 | GET | /api/open/apikeys/:id | 获取密钥详情 |
-| PUT | /api/open/apikeys/:id | 更新API密钥 |
-| POST | /api/open/apikeys/:id/reset | 重置密钥 |
-| PUT | /api/open/apikeys/:id/toggle | 切换状态 |
-| DELETE | /api/open/apikeys/:id | 删除密钥 |
+
+以下操作仅限管理后台，API 调用返回 403：
+
+| 操作 | 说明 |
+|------|------|
+| 创建密钥 | POST /api/open/apikeys |
+| 更新密钥 | PUT /api/open/apikeys/:id |
+| 重置密钥 | POST /api/open/apikeys/:id/reset |
+| 切换状态 | PUT /api/open/apikeys/:id/toggle |
+| 删除密钥 | DELETE /api/open/apikeys/:id |
 
 ### 密码代理认证
 
@@ -1909,8 +1959,39 @@ curl -X GET "${BASE_URL}/api/open/sync/users?updated_after=2026-02-24T00:00:00Z"
 
 ### API 安全限制
 
-- **禁止操作管理员账户**：不允许通过 API 修改、删除 admin 账户
-- **禁止分配超级管理员角色**：API 无法给用户分配超级管理员权限
+以下操作通过 API **无法执行**，以确保系统安全：
+
+| 限制项 | 说明 |
+|--------|------|
+| **禁止操作管理员账户** | 不允许通过 API 修改、删除 admin 账户 |
+| **禁止分配超级管理员角色** | API 无法给用户分配 super_admin 角色 |
+| **禁止操作 API 密钥** | 不允许通过 API 创建、修改、删除、重置 API 密钥（只能查看） |
+| **禁止删除日志** | 所有日志只能通过系统定时清理任务删除 |
+
+### 安全限制错误响应
+
+当触发安全限制时，API 返回 403 Forbidden：
+
+```json
+{
+  "success": false,
+  "message": "API 安全限制：不允许通过 API 操作管理员账户"
+}
+```
+
+```json
+{
+  "success": false,
+  "message": "API 安全限制：不允许通过 API 分配超级管理员角色"
+}
+```
+
+```json
+{
+  "success": false,
+  "message": "API 安全限制：不允许通过 API 创建、修改或删除 API 密钥，请在管理后台操作"
+}
+```
 
 ### 频率限制
 

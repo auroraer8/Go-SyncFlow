@@ -113,13 +113,18 @@
           <p class="subtitle">{{ uiConfig.loginSubtitle || '欢迎使用统一用户管理平台' }}</p>
         </div>
         
-        <el-form :model="form" @submit.prevent="handleLogin" class="login-form">
+        <!-- 表单/扫码区域容器 -->
+        <div class="login-body" ref="loginBodyRef">
+
+        <!-- 账号密码登录表单 -->
+        <el-form v-show="loginMode === 'password'" :model="form" @submit.prevent="handleLoginOrVerify" class="login-form">
           <el-form-item>
             <el-input 
               v-model="form.username" 
               placeholder="请输入用户名" 
               size="large"
               :prefix-icon="User"
+              :disabled="show2FAInput"
             />
           </el-form-item>
           <el-form-item>
@@ -130,10 +135,41 @@
               size="large"
               :prefix-icon="Lock"
               show-password
-              @keyup.enter="handleLogin"
+              :disabled="show2FAInput"
+              @keyup.enter="handleLoginOrVerify"
             />
           </el-form-item>
-          <el-form-item>
+          
+          <!-- 2FA 验证码输入（内嵌在表单中） -->
+          <el-form-item v-if="show2FAInput">
+            <div class="twofa-inline">
+              <div class="twofa-inline-hint">
+                <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
+                  <path d="M12 2C9.24 2 7 4.24 7 7v3H6c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-8c0-1.1-.9-2-2-2h-1V7c0-2.76-2.24-5-5-5zm0 2c1.66 0 3 1.34 3 3v3H9V7c0-1.66 1.34-3 3-3z" fill="#3b82f6"/>
+                </svg>
+                <span>验证码已发送至 {{ twoFactorTarget }}</span>
+              </div>
+              <el-input
+                v-model="twoFactorCode"
+                placeholder="请输入6位验证码"
+                size="large"
+                maxlength="6"
+                @keyup.enter="handleLoginOrVerify"
+              >
+                <template #append>
+                  <el-button
+                    :disabled="twoFactorCooldown > 0"
+                    @click="resend2FACode"
+                    class="resend-btn"
+                  >
+                    {{ twoFactorCooldown > 0 ? `${twoFactorCooldown}s` : '重新发送' }}
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-form-item>
+          
+          <el-form-item v-if="!show2FAInput">
             <div class="remember-row">
               <el-checkbox v-model="rememberMe">记住账号</el-checkbox>
               <a class="forgot-link" @click="openForgotPassword">忘记密码？</a>
@@ -144,79 +180,113 @@
               type="primary" 
               size="large" 
               class="login-btn"
-              :loading="loading" 
-              @click="handleLogin"
+              :loading="loading || twoFactorLoading" 
+              @click="handleLoginOrVerify"
             >
-              <span v-if="!loading">登 录</span>
-              <span v-else>登录中...</span>
+              <span v-if="show2FAInput">{{ twoFactorLoading ? '验证中...' : '验证并登录' }}</span>
+              <span v-else-if="loading">登录中...</span>
+              <span v-else>登 录</span>
             </el-button>
+          </el-form-item>
+          <el-form-item v-if="show2FAInput">
+            <div class="twofa-cancel">
+              <span @click="cancel2FA">取消登录</span>
+            </div>
           </el-form-item>
         </el-form>
         
-        <!-- SSO 登录区域已移除，SSO免登仅在IM平台内部自动触发 -->
+        <!-- 钉钉扫码登录面板 -->
+        <div v-show="loginMode === 'dingtalk_qr'" class="qrcode-panel">
+          <div class="qrcode-wrapper">
+            <div id="dingtalk-qr-container" class="qrcode-container"></div>
+            <div v-if="dingtalkQRError" class="qrcode-overlay qrcode-error">
+              <svg viewBox="0 0 24 24" fill="none" width="40" height="40">
+                <circle cx="12" cy="12" r="10" stroke="#f56c6c" stroke-width="2"/>
+                <path d="M12 8v4M12 16h.01" stroke="#f56c6c" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+              <p>{{ dingtalkQRError }}</p>
+              <el-button size="small" @click="initDingTalkQRCode">重新加载</el-button>
+            </div>
+          </div>
+          <p v-show="!dingtalkQRError" class="qrcode-tip">请使用钉钉扫描二维码登录</p>
+        </div>
 
-        <div class="card-footer">
+        <!-- 飞书扫码登录面板 -->
+        <div v-show="loginMode === 'feishu_qr'" class="qrcode-panel">
+          <div class="qrcode-wrapper">
+            <div id="feishu-qr-container" class="qrcode-container"></div>
+            <div v-if="feishuQRError" class="qrcode-overlay qrcode-error">
+              <svg viewBox="0 0 24 24" fill="none" width="40" height="40">
+                <circle cx="12" cy="12" r="10" stroke="#f56c6c" stroke-width="2"/>
+                <path d="M12 8v4M12 16h.01" stroke="#f56c6c" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+              <p>{{ feishuQRError }}</p>
+              <el-button size="small" @click="initFeishuQRCode">重新加载</el-button>
+            </div>
+          </div>
+          <p v-show="!feishuQRError" class="qrcode-tip">请使用飞书扫描二维码登录</p>
+        </div>
+
+        <!-- 企业微信扫码登录面板 -->
+        <div v-show="loginMode === 'wechatwork_qr'" class="qrcode-panel">
+          <div class="qrcode-wrapper">
+            <div id="wechatwork-qr-container" class="qrcode-container"></div>
+            <div v-if="wechatworkQRError" class="qrcode-overlay qrcode-error">
+              <svg viewBox="0 0 24 24" fill="none" width="40" height="40">
+                <circle cx="12" cy="12" r="10" stroke="#f56c6c" stroke-width="2"/>
+                <path d="M12 8v4M12 16h.01" stroke="#f56c6c" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+              <p>{{ wechatworkQRError }}</p>
+              <el-button size="small" @click="initWeChatWorkQRCode">重新加载</el-button>
+            </div>
+          </div>
+          <p v-show="!wechatworkQRError" class="qrcode-tip">请使用企业微信扫描二维码登录</p>
+        </div>
+
+        </div><!-- /login-body -->
+
+        <!-- 底部标签切换 -->
+        <div class="login-mode-tabs" v-if="hasAnyQRLogin">
+          <div 
+            class="mode-tab" 
+            :class="{ active: loginMode === 'password' }"
+            @click="switchLoginMode('password')"
+          >
+            账号密码
+          </div>
+          <div 
+            v-if="hasDingTalkSSO"
+            class="mode-tab" 
+            :class="{ active: loginMode === 'dingtalk_qr' }"
+            @click="switchLoginMode('dingtalk_qr')"
+          >
+            钉钉扫码
+          </div>
+          <div 
+            v-if="hasFeishuSSO"
+            class="mode-tab" 
+            :class="{ active: loginMode === 'feishu_qr' }"
+            @click="switchLoginMode('feishu_qr')"
+          >
+            飞书扫码
+          </div>
+          <div 
+            v-if="hasWeChatWorkSSO"
+            class="mode-tab" 
+            :class="{ active: loginMode === 'wechatwork_qr' }"
+            @click="switchLoginMode('wechatwork_qr')"
+          >
+            企微扫码
+          </div>
+        </div>
+
+        <div class="card-footer" v-if="!hasAnyQRLogin" style="margin-top:auto">
           <p>{{ uiConfig.footerText || '统一身份 · 高效管理' }}</p>
         </div>
       </div>
     </div>
     
-    <!-- 双因素认证对话框 -->
-    <el-dialog
-      v-model="show2FADialog"
-      title=""
-      width="400px"
-      :close-on-click-modal="false"
-      class="twofa-dialog"
-      destroy-on-close
-      @close="close2FADialog"
-    >
-      <div class="twofa-content">
-        <div class="twofa-header">
-          <svg viewBox="0 0 48 48" fill="none" width="48" height="48">
-            <circle cx="24" cy="24" r="20" fill="#eff6ff"/>
-            <path d="M24 8a10 10 0 0 0-10 10v4h-2a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h24a2 2 0 0 0 2-2V24a2 2 0 0 0-2-2h-2v-4a10 10 0 0 0-10-10zm-6 14v-4a6 6 0 1 1 12 0v4H18z" fill="#3b82f6"/>
-            <circle cx="24" cy="30" r="3" fill="white"/>
-          </svg>
-          <h3>请输入动态验证码</h3>
-          <p>验证码已发送至 {{ twoFactorTarget }}</p>
-        </div>
-
-        <div class="twofa-field">
-          <el-input
-            v-model="twoFactorCode"
-            placeholder="请输入6位验证码"
-            size="large"
-            maxlength="6"
-            @keyup.enter="verify2FACode"
-          >
-            <template #append>
-              <el-button
-                :disabled="twoFactorCooldown > 0"
-                @click="resend2FACode"
-                style="width: 100px"
-              >
-                {{ twoFactorCooldown > 0 ? `${twoFactorCooldown}s` : '重新发送' }}
-              </el-button>
-            </template>
-          </el-input>
-        </div>
-
-        <el-button
-          type="primary"
-          size="large"
-          class="twofa-btn"
-          :loading="twoFactorLoading"
-          @click="verify2FACode"
-        >
-          验证并登录
-        </el-button>
-
-        <div class="twofa-hint">
-          <span @click="close2FADialog">取消登录</span>
-        </div>
-      </div>
-    </el-dialog>
+    <!-- 双因素认证对话框（已改为内嵌表单，此处保留但不再使用） -->
 
     <!-- 忘记密码弹窗 -->
     <el-dialog
@@ -315,10 +385,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElLoading } from "element-plus";
-import { User, Lock } from "@element-plus/icons-vue";
+import { User, Lock, Loading } from "@element-plus/icons-vue";
 import { useUserStore } from "../store/user";
 import { settingsApi, authApi, syncApi } from "../api";
 
@@ -330,8 +400,12 @@ const form = reactive({ username: "", password: "" });
 const loading = ref(false);
 const rememberMe = ref(false);
 
-// 双因素认证
-const show2FADialog = ref(false);
+// 登录模式：password | dingtalk_qr | feishu_qr | wechatwork_qr
+const loginMode = ref<'password' | 'dingtalk_qr' | 'feishu_qr' | 'wechatwork_qr'>('password');
+const loginBodyRef = ref<HTMLElement | null>(null);
+
+// 双因素认证（内嵌表单模式）
+const show2FAInput = ref(false);
 const twoFactorCode = ref("");
 const twoFactorPendingToken = ref("");
 const twoFactorTarget = ref("");
@@ -339,7 +413,32 @@ const twoFactorChannelType = ref("");
 const twoFactorLoading = ref(false);
 const twoFactorCooldown = ref(0);
 let twoFactorTimer: ReturnType<typeof setInterval> | null = null;
+
+// 钉钉相关
 const dingtalkLoading = ref(false);
+const dingtalkQRLoading = ref(false);
+const dingtalkQRError = ref("");
+const hasDingTalkSSO = ref(false);
+let dingtalkProvider: any = null;
+
+// 飞书相关
+const feishuQRLoading = ref(false);
+const feishuQRError = ref("");
+const hasFeishuSSO = ref(false);
+let feishuProvider: any = null;
+
+// 企微相关
+const wechatworkQRLoading = ref(false);
+const wechatworkQRError = ref("");
+const hasWeChatWorkSSO = ref(false);
+let wechatworkProvider: any = null;
+
+// 是否有任意扫码登录可用
+const hasAnyQRLogin = computed(() => hasDingTalkSSO.value || hasFeishuSSO.value || hasWeChatWorkSSO.value);
+
+// 保留旧的弹窗变量用于兼容（但不再使用）
+const show2FADialog = ref(false);
+
 const uiConfig = ref({ 
   browserTitle: '', 
   loginTitle: '',
@@ -372,6 +471,47 @@ const particleStyle = (index: number) => {
   };
 };
 
+// 切换登录模式
+const switchLoginMode = (mode: 'password' | 'dingtalk_qr' | 'feishu_qr' | 'wechatwork_qr') => {
+  if (mode === loginMode.value) return;
+  
+  if (show2FAInput.value) {
+    cancel2FA();
+  }
+  
+  loginMode.value = mode;
+  
+  // 切换到对应模式时初始化二维码
+  nextTick(() => {
+    if (mode === 'feishu_qr' && hasFeishuSSO.value) {
+      initFeishuQRCode();
+    } else if (mode === 'wechatwork_qr' && hasWeChatWorkSSO.value) {
+      initWeChatWorkQRCode();
+    }
+  });
+};
+
+// 取消 2FA 验证
+const cancel2FA = () => {
+  show2FAInput.value = false;
+  twoFactorPendingToken.value = "";
+  twoFactorCode.value = "";
+  if (twoFactorTimer) {
+    clearInterval(twoFactorTimer);
+    twoFactorTimer = null;
+  }
+  twoFactorCooldown.value = 0;
+};
+
+// 统一的登录/验证处理
+const handleLoginOrVerify = async () => {
+  if (show2FAInput.value) {
+    await verify2FACode();
+  } else {
+    await handleLogin();
+  }
+};
+
 const handleLogin = async () => {
   if (!form.username || !form.password) {
     ElMessage.warning("请输入用户名和密码");
@@ -387,7 +527,8 @@ const handleLogin = async () => {
         twoFactorTarget.value = result.target || result.masked_phone || "";
         twoFactorChannelType.value = result.channel_type || "sms";
         twoFactorCode.value = "";
-        show2FADialog.value = true;
+        // 使用内嵌表单模式
+        show2FAInput.value = true;
         // 开始冷却计时（因为验证码已发送）
         start2FACooldown();
         loading.value = false;
@@ -466,6 +607,8 @@ const verify2FACode = async () => {
   try {
     const result = await userStore.verify2FA(twoFactorPendingToken.value, twoFactorCode.value);
     if (result.success) {
+      // 重置状态
+      show2FAInput.value = false;
       show2FADialog.value = false;
       if (rememberMe.value) {
         localStorage.setItem('rememberedUser', form.username);
@@ -484,15 +627,10 @@ const verify2FACode = async () => {
   }
 };
 
-// 关闭 2FA 对话框
+// 关闭 2FA 对话框（保留兼容）
 const close2FADialog = () => {
   show2FADialog.value = false;
-  twoFactorPendingToken.value = "";
-  twoFactorCode.value = "";
-  if (twoFactorTimer) {
-    clearInterval(twoFactorTimer);
-    twoFactorTimer = null;
-  }
+  cancel2FA();
 };
 
 // ========== 忘记密码 ==========
@@ -919,6 +1057,440 @@ const loadDingTalkSDK = () => {
   });
 };
 
+// 等待 DTFrameLogin SDK 就绪（已在 index.html 中 async 加载）
+const waitForDTFrameLogin = () => {
+  return new Promise<void>((resolve, reject) => {
+    if ((window as any).DTFrameLogin) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(() => reject(new Error('钉钉登录SDK加载超时')), 5000);
+    const check = setInterval(() => {
+      if ((window as any).DTFrameLogin) {
+        clearInterval(check);
+        clearTimeout(timeout);
+        resolve();
+      }
+    }, 50);
+  });
+};
+
+// 初始化钉钉扫码二维码（DTFrameLogin 内嵌方式）
+const initDingTalkQRCode = async () => {
+  if (!dingtalkProvider) {
+    dingtalkQRError.value = "钉钉登录未配置";
+    return;
+  }
+  
+  dingtalkQRLoading.value = true;
+  dingtalkQRError.value = "";
+  
+  try {
+    await waitForDTFrameLogin();
+    
+    const DTFrameLogin = (window as any).DTFrameLogin;
+    if (!DTFrameLogin) {
+      throw new Error('钉钉登录SDK加载失败');
+    }
+    
+    const clientId = dingtalkProvider.appId;
+    if (!clientId) {
+      throw new Error('钉钉扫码登录需要配置 AppKey（client_id），请在连接器配置中填写');
+    }
+    
+    const corpId = dingtalkProvider.corpId || '';
+    const redirectUri = dingtalkProvider.callbackUrl || (window.location.origin + '/login');
+    const state = `dingtalk_qr_${dingtalkProvider.connectorId}`;
+    
+    await nextTick();
+    const container = document.getElementById('dingtalk-qr-container');
+    if (!container) {
+      throw new Error('二维码容器不存在');
+    }
+    container.innerHTML = '';
+    
+    DTFrameLogin(
+      {
+        id: 'dingtalk-qr-container',
+        width: 245,
+        height: 245,
+      },
+      {
+        redirect_uri: encodeURIComponent(redirectUri),
+        client_id: clientId,
+        scope: 'openid corpid',
+        response_type: 'code',
+        state,
+        prompt: 'consent',
+        ...(corpId ? { corpId } : {}),
+      },
+      async (loginResult: { redirectUrl: string; authCode: string; state: string }) => {
+        // 扫码成功，直接用 authCode 调后端，无需页面跳转
+        await completeDingTalkQRLogin(loginResult.authCode);
+      },
+      (errorMsg: string) => {
+        dingtalkQRError.value = errorMsg || '扫码登录失败';
+      },
+    );
+    
+  } catch (e: any) {
+    dingtalkQRError.value = e.message || '加载二维码失败';
+  } finally {
+    dingtalkQRLoading.value = false;
+  }
+};
+
+// 钉钉扫码成功后直接调后端完成登录
+const completeDingTalkQRLogin = async (authCode: string) => {
+  if (!dingtalkProvider) return;
+  
+  const loadingInstance = ElLoading.service({
+    text: '钉钉登录中...',
+    background: 'rgba(255, 255, 255, 0.8)'
+  });
+  
+  try {
+    const res = await syncApi.dingtalkQRLogin({
+      connectorId: dingtalkProvider.connectorId,
+      code: authCode
+    });
+    
+    if ((res as any).data?.success) {
+      const { token, user } = (res as any).data.data;
+      localStorage.setItem('token', token);
+      userStore.setToken(token);
+      userStore.setUser(user);
+      await userStore.fetchUserInfo();
+      ElMessage.success('钉钉登录成功');
+      const landing = userStore.layoutConfig?.landingPage;
+      router.push(landing || '/');
+    } else {
+      throw new Error((res as any).data?.message || '钉钉登录失败');
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || e?.message || '钉钉登录失败');
+    // 重新初始化二维码
+    nextTick(() => initDingTalkQRCode());
+  } finally {
+    loadingInstance.close();
+  }
+};
+
+// 处理钉钉扫码回调
+const handleDingTalkQRCallback = async () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+  const state = urlParams.get('state');
+  
+  // 检查是否是钉钉扫码回调（state 格式: dingtalk_qr_<connectorId>）
+  if (!code || !state || !state.startsWith('dingtalk_qr_')) {
+    return false;
+  }
+  
+  const cid = state.replace('dingtalk_qr_', '');
+  
+  ssoLoading.value = true;
+  const loadingInstance = ElLoading.service({
+    text: '钉钉登录中...',
+    background: 'rgba(255, 255, 255, 0.8)'
+  });
+  
+  try {
+    // 调用扫码登录接口
+    const res = await syncApi.dingtalkQRLogin({
+      connectorId: parseInt(cid),
+      code
+    });
+    
+    if ((res as any).data?.success) {
+      const { token, user } = (res as any).data.data;
+      localStorage.setItem('token', token);
+      userStore.setToken(token);
+      userStore.setUser(user);
+      await userStore.fetchUserInfo();
+      ElMessage.success('钉钉登录成功');
+      const landing = userStore.layoutConfig?.landingPage;
+      router.push(landing || '/');
+      return true;
+    } else {
+      throw new Error((res as any).data?.message || '钉钉登录失败');
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || e?.message || '钉钉登录失败');
+    // 清除 URL 参数
+    window.history.replaceState({}, '', '/login');
+    return false;
+  } finally {
+    loadingInstance.close();
+    ssoLoading.value = false;
+  }
+};
+
+// ========== 飞书扫码登录 ==========
+
+// 等待飞书 QRLogin SDK 就绪
+const waitForFeishuQRLogin = () => {
+  return new Promise<void>((resolve, reject) => {
+    if ((window as any).QRLogin) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(() => reject(new Error('飞书登录SDK加载超时')), 5000);
+    const check = setInterval(() => {
+      if ((window as any).QRLogin) {
+        clearInterval(check);
+        clearTimeout(timeout);
+        resolve();
+      }
+    }, 50);
+  });
+};
+
+// 初始化飞书扫码二维码
+const initFeishuQRCode = async () => {
+  if (!feishuProvider) {
+    feishuQRError.value = "飞书登录未配置";
+    return;
+  }
+  
+  feishuQRLoading.value = true;
+  feishuQRError.value = "";
+  
+  try {
+    await waitForFeishuQRLogin();
+    
+    const QRLogin = (window as any).QRLogin;
+    if (!QRLogin) {
+      throw new Error('飞书登录SDK加载失败');
+    }
+    
+    const appId = feishuProvider.appId;
+    if (!appId) {
+      throw new Error('飞书扫码登录需要配置 App ID');
+    }
+    
+    const redirectUri = encodeURIComponent(window.location.origin + '/login');
+    const state = `feishu_qr_${feishuProvider.connectorId}`;
+    
+    // 构建 goto 参数（飞书授权链接）
+    const goto = encodeURIComponent(
+      `https://passport.feishu.cn/suite/passport/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&state=${state}`
+    );
+    
+    await nextTick();
+    const container = document.getElementById('feishu-qr-container');
+    if (!container) {
+      throw new Error('二维码容器不存在');
+    }
+    container.innerHTML = '';
+    
+    // 渲染二维码
+    QRLogin({
+      id: 'feishu-qr-container',
+      goto,
+      width: '245',
+      height: '245',
+      style: 'width:245px;height:245px;border:none;'
+    });
+    
+    // 监听扫码消息
+    const handleFeishuMessage = (event: MessageEvent) => {
+      const origin = event.origin;
+      // 校验来源
+      if (!['https://passport.feishu.cn', 'https://open.feishu.cn'].includes(origin)) {
+        return;
+      }
+      
+      const data = event.data;
+      // 飞书 SDK 返回 tmp_code
+      if (typeof data === 'string') {
+        // URL 格式: ...?tmp_code=xxx 或直接 tmp_code=xxx
+        const match = data.match(/tmp_code=([^&]+)/);
+        if (match) {
+          const tmpCode = match[1];
+          window.removeEventListener('message', handleFeishuMessage);
+          // 跳转到飞书授权页面换取真正的 code
+          window.location.href = `https://passport.feishu.cn/suite/passport/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&state=${state}&tmp_code=${tmpCode}`;
+        }
+      }
+    };
+    
+    window.addEventListener('message', handleFeishuMessage);
+    
+  } catch (e: any) {
+    feishuQRError.value = e.message || '加载二维码失败';
+  } finally {
+    feishuQRLoading.value = false;
+  }
+};
+
+// 处理飞书扫码回调
+const handleFeishuQRCallback = async () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+  const state = urlParams.get('state');
+  
+  // 检查是否是飞书扫码回调（state 格式: feishu_qr_<connectorId>）
+  if (!code || !state || !state.startsWith('feishu_qr_')) {
+    return false;
+  }
+  
+  const cid = state.replace('feishu_qr_', '');
+  
+  ssoLoading.value = true;
+  const loadingInstance = ElLoading.service({
+    text: '飞书登录中...',
+    background: 'rgba(255, 255, 255, 0.8)'
+  });
+  
+  try {
+    const res = await syncApi.feishuQRLogin({
+      connectorId: parseInt(cid),
+      code
+    });
+    
+    if ((res as any).data?.success) {
+      const { token, user } = (res as any).data.data;
+      localStorage.setItem('token', token);
+      userStore.setToken(token);
+      userStore.setUser(user);
+      await userStore.fetchUserInfo();
+      ElMessage.success('飞书登录成功');
+      const landing = userStore.layoutConfig?.landingPage;
+      router.push(landing || '/');
+      return true;
+    } else {
+      throw new Error((res as any).data?.message || '飞书登录失败');
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || e?.message || '飞书登录失败');
+    window.history.replaceState({}, '', '/login');
+    return false;
+  } finally {
+    loadingInstance.close();
+    ssoLoading.value = false;
+  }
+};
+
+// ========== 企业微信扫码登录 ==========
+
+// 等待企微 WwLogin SDK 就绪
+const waitForWwLogin = () => {
+  return new Promise<void>((resolve, reject) => {
+    if ((window as any).WwLogin) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(() => reject(new Error('企业微信登录SDK加载超时')), 5000);
+    const check = setInterval(() => {
+      if ((window as any).WwLogin) {
+        clearInterval(check);
+        clearTimeout(timeout);
+        resolve();
+      }
+    }, 50);
+  });
+};
+
+// 初始化企微扫码二维码
+const initWeChatWorkQRCode = async () => {
+  if (!wechatworkProvider) {
+    wechatworkQRError.value = "企业微信登录未配置";
+    return;
+  }
+  
+  wechatworkQRLoading.value = true;
+  wechatworkQRError.value = "";
+  
+  try {
+    await waitForWwLogin();
+    
+    const WwLogin = (window as any).WwLogin;
+    if (!WwLogin) {
+      throw new Error('企业微信登录SDK加载失败');
+    }
+    
+    const corpId = wechatworkProvider.corpId;
+    const agentId = wechatworkProvider.agentId;
+    if (!corpId || !agentId) {
+      throw new Error('企业微信扫码登录需要配置 CorpID 和 AgentID');
+    }
+    
+    const redirectUri = encodeURIComponent(window.location.origin + '/login');
+    const state = `wechatwork_qr_${wechatworkProvider.connectorId}`;
+    
+    await nextTick();
+    const container = document.getElementById('wechatwork-qr-container');
+    if (!container) {
+      throw new Error('二维码容器不存在');
+    }
+    container.innerHTML = '';
+    
+    // 创建企微扫码实例
+    new WwLogin({
+      id: 'wechatwork-qr-container',
+      appid: corpId,
+      agentid: agentId,
+      redirect_uri: redirectUri,
+      state: state,
+      lang: 'zh'
+    });
+    
+  } catch (e: any) {
+    wechatworkQRError.value = e.message || '加载二维码失败';
+  } finally {
+    wechatworkQRLoading.value = false;
+  }
+};
+
+// 处理企微扫码回调
+const handleWeChatWorkQRCallback = async () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+  const state = urlParams.get('state');
+  
+  // 检查是否是企微扫码回调（state 格式: wechatwork_qr_<connectorId>）
+  if (!code || !state || !state.startsWith('wechatwork_qr_')) {
+    return false;
+  }
+  
+  const cid = state.replace('wechatwork_qr_', '');
+  
+  ssoLoading.value = true;
+  const loadingInstance = ElLoading.service({
+    text: '企业微信登录中...',
+    background: 'rgba(255, 255, 255, 0.8)'
+  });
+  
+  try {
+    const res = await syncApi.wechatworkQRLogin({
+      connectorId: parseInt(cid),
+      code
+    });
+    
+    if ((res as any).data?.success) {
+      const { token, user } = (res as any).data.data;
+      localStorage.setItem('token', token);
+      userStore.setToken(token);
+      userStore.setUser(user);
+      await userStore.fetchUserInfo();
+      ElMessage.success('企业微信登录成功');
+      const landing = userStore.layoutConfig?.landingPage;
+      router.push(landing || '/');
+      return true;
+    } else {
+      throw new Error((res as any).data?.message || '企业微信登录失败');
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || e?.message || '企业微信登录失败');
+    window.history.replaceState({}, '', '/login');
+    return false;
+  } finally {
+    loadingInstance.close();
+    ssoLoading.value = false;
+  }
+};
+
 onMounted(async () => {
   const rememberedUser = localStorage.getItem('rememberedUser');
   if (rememberedUser) {
@@ -926,18 +1498,45 @@ onMounted(async () => {
     rememberMe.value = true;
   }
   
-  try {
-    const res = await settingsApi.getUI();
-    if (res.data.success) {
-      uiConfig.value = res.data.data;
-      if (uiConfig.value.browserTitle) {
-        document.title = uiConfig.value.browserTitle;
-      }
+  // 并行加载 UI 配置和 SSO 提供商（减少等待时间）
+  const [uiRes] = await Promise.all([
+    settingsApi.getUI().catch(() => null),
+    loadSSOProviders()
+  ]);
+  
+  if (uiRes?.data?.success) {
+    uiConfig.value = uiRes.data.data;
+    if (uiConfig.value.browserTitle) {
+      document.title = uiConfig.value.browserTitle;
     }
-  } catch (e) {}
+  }
+  
+  // 检查是否有各平台 SSO 配置（需要启用扫码登录开关）
+  dingtalkProvider = ssoProviders.value.find((p: any) => p.platform === 'im_dingtalk' && p.enableQrLogin);
+  hasDingTalkSSO.value = !!dingtalkProvider;
+  
+  feishuProvider = ssoProviders.value.find((p: any) => p.platform === 'im_feishu' && p.enableQrLogin);
+  hasFeishuSSO.value = !!feishuProvider;
+  
+  wechatworkProvider = ssoProviders.value.find((p: any) => p.platform === 'im_wechatwork' && p.enableQrLogin);
+  hasWeChatWorkSSO.value = !!wechatworkProvider;
 
-  // 加载SSO提供商
-  loadSSOProviders();
+  // 预初始化钉钉二维码（SDK 已在 HTML 中 async 加载，此时应该已就绪）
+  if (hasDingTalkSSO.value) {
+    initDingTalkQRCode();
+  }
+
+  // 检查是否有钉钉扫码回调（DTFrameLogin 重定向兜底）
+  const dingtalkQRHandled = await handleDingTalkQRCallback();
+  if (dingtalkQRHandled) return;
+
+  // 检查是否有飞书扫码回调
+  const feishuQRHandled = await handleFeishuQRCallback();
+  if (feishuQRHandled) return;
+
+  // 检查是否有企微扫码回调
+  const wechatworkQRHandled = await handleWeChatWorkQRCallback();
+  if (wechatworkQRHandled) return;
 
   // 检查是否有SSO回调
   const ssoHandled = await handleSSOCallback();
@@ -975,6 +1574,12 @@ onMounted(async () => {
       // 静默处理，显示正常登录界面
       dingtalkLoading.value = false;
     }
+  }
+});
+
+onUnmounted(() => {
+  if (twoFactorTimer) {
+    clearInterval(twoFactorTimer);
   }
 });
 </script>
@@ -1367,19 +1972,23 @@ onMounted(async () => {
 .card-content {
   background: #ffffff;
   border-radius: var(--radius-xl);
-  padding: 40px;
+  padding: 20px 40px 28px;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  width: 380px;
+  height: 500px;
+  display: flex;
+  flex-direction: column;
 }
 
 .card-header {
   text-align: center;
-  margin-bottom: 28px;
+  margin-bottom: 12px;
 }
 
 .logo-icon {
-  width: 56px;
-  height: 56px;
-  margin: 0 auto 14px;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 8px;
 }
 
 .logo-icon svg {
@@ -1388,7 +1997,7 @@ onMounted(async () => {
 }
 
 .card-header h2 {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0 0 6px 0;
@@ -1402,6 +2011,10 @@ onMounted(async () => {
 
 /* 登录表单 */
 .login-form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   margin-bottom: 16px;
 }
 
@@ -1424,7 +2037,7 @@ onMounted(async () => {
 }
 
 .login-form :deep(.el-input__inner) {
-  height: 44px;
+  height: 42px;
 }
 
 .remember-row {
@@ -1815,6 +2428,155 @@ onMounted(async () => {
   font-size: 13px;
   color: var(--color-text-tertiary);
   margin: 0;
+}
+
+/* 2FA 内嵌样式 */
+.twofa-inline {
+  width: 100%;
+}
+
+.twofa-inline-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #eff6ff;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  color: #3b82f6;
+}
+
+.twofa-inline-hint svg {
+  flex-shrink: 0;
+}
+
+.twofa-cancel {
+  text-align: center;
+  margin-top: -8px;
+}
+
+.twofa-cancel span {
+  font-size: 13px;
+  color: #86909c;
+  cursor: pointer;
+}
+
+.twofa-cancel span:hover {
+  color: #3b82f6;
+}
+
+.resend-btn {
+  min-width: 90px;
+}
+
+/* 表单/扫码统一容器 */
+.login-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 扫码面板 */
+.qrcode-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.qrcode-wrapper {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  overflow: hidden;
+}
+
+.qrcode-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #fff;
+  margin-top: -30px;
+}
+
+.qrcode-container :deep(iframe) {
+  border: none !important;
+  display: block;
+}
+
+.qrcode-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #fff;
+  color: #86909c;
+  font-size: 14px;
+  margin-top: 30px;
+}
+
+.qrcode-error p {
+  color: #f56c6c;
+  font-size: 13px;
+  margin: 0;
+  text-align: center;
+  padding: 0 12px;
+}
+
+.qrcode-tip {
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+  margin: 12px 0 0 0;
+  text-align: center;
+}
+
+/* 底部标签切换 */
+.login-mode-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+  margin-top: auto;
+}
+
+.mode-tab {
+  font-size: 14px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  padding: 8px 0;
+  position: relative;
+  transition: color 0.2s;
+}
+
+.mode-tab:hover {
+  color: var(--color-primary);
+}
+
+.mode-tab.active {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.mode-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 2px;
+  background: var(--color-primary);
+  border-radius: 1px;
 }
 </style>
 

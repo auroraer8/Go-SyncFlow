@@ -1,11 +1,15 @@
 package imclient
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,12 +19,18 @@ import (
 )
 
 const (
-	dtAPIGetToken        = "https://oapi.dingtalk.com/gettoken"
-	dtAPIGetUserInfo     = "https://oapi.dingtalk.com/topapi/v2/user/getuserinfo"
-	dtAPIGetUserDetail   = "https://oapi.dingtalk.com/topapi/v2/user/get"
-	dtAPIDeptListSub     = "https://oapi.dingtalk.com/topapi/v2/department/listsub"
-	dtAPIDeptUserList    = "https://oapi.dingtalk.com/topapi/v2/user/list"
-	dtAPISendWorkMessage = "https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2"
+	dtAPIGetToken          = "https://oapi.dingtalk.com/gettoken"
+	dtAPIGetUserInfo       = "https://oapi.dingtalk.com/topapi/v2/user/getuserinfo"
+	dtAPIGetUserDetail     = "https://oapi.dingtalk.com/topapi/v2/user/get"
+	dtAPIDeptListSub       = "https://oapi.dingtalk.com/topapi/v2/department/listsub"
+	dtAPIDeptUserList      = "https://oapi.dingtalk.com/topapi/v2/user/list"
+	dtAPISendWorkMessage   = "https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2"
+	dtAPISNSGetUserByCode  = "https://oapi.dingtalk.com/sns/getuserinfo_bycode"
+	dtAPIGetUserByUnionID  = "https://oapi.dingtalk.com/topapi/user/getbyunionid"
+
+	// 新版 OAuth2 接口（DTFrameLogin 扫码登录使用）
+	dtAPIUserAccessToken   = "https://api.dingtalk.com/v1.0/oauth2/userAccessToken"
+	dtAPIContactUserMe     = "https://api.dingtalk.com/v1.0/contact/users/me"
 )
 
 // DingTalkClient 钉钉 IM 客户端
@@ -334,6 +344,199 @@ func (c *DingTalkClient) GetUserIDByMobile(mobile string) (string, error) {
 	}
 	if result.ErrCode != 0 {
 		return "", fmt.Errorf("通过手机号查询钉钉用户失败: %s (code=%d)", result.ErrMsg, result.ErrCode)
+	}
+	return result.Result.UserID, nil
+}
+
+// GetUserBySNSAuthCode 通过扫码登录的 SNS 授权码获取用户信息
+// 扫码登录使用 sns/getuserinfo_bycode 接口，需要使用 AppSecret 签名
+func (c *DingTalkClient) GetUserBySNSAuthCode(code string) (*IMUserInfo, error) {
+	if c.conn.IMAppID == "" || c.conn.IMAppSecret == "" {
+		return nil, fmt.Errorf("钉钉 AppKey 或 AppSecret 未配置")
+	}
+
+	// 1. 计算签名
+	timestamp := fmt.Sprintf("%d", time.Now().UnixMilli())
+	signature := c.computeSNSSignature(timestamp)
+
+	// 2. 调用 SNS 接口获取用户信息
+	apiURL := fmt.Sprintf("%s?accessKey=%s&timestamp=%s&signature=%s",
+		dtAPISNSGetUserByCode,
+		url.QueryEscape(c.conn.IMAppID),
+		timestamp,
+		url.QueryEscape(signature))
+
+	reqBody := fmt.Sprintf(`{"tmp_auth_code":"%s"}`, code)
+	resp, err := c.httpClient.Post(apiURL, "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("请求钉钉SNS接口失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var snsResult struct {
+		ErrCode  int    `json:"errcode"`
+		ErrMsg   string `json:"errmsg"`
+		UserInfo struct {
+			Nick    string `json:"nick"`
+			OpenID  string `json:"openid"`
+			UnionID string `json:"unionid"`
+		} `json:"user_info"`
+	}
+	if err := json.Unmarshal(body, &snsResult); err != nil {
+		return nil, fmt.Errorf("解析钉钉SNS响应失败: %v", err)
+	}
+	if snsResult.ErrCode != 0 {
+		return nil, fmt.Errorf("获取SNS用户信息失败: %s (code=%d)", snsResult.ErrMsg, snsResult.ErrCode)
+	}
+
+	log.Printf("[钉钉扫码] SNS用户信息: nick=%s, unionid=%s", snsResult.UserInfo.Nick, snsResult.UserInfo.UnionID)
+
+	// 3. 通过 UnionID 获取企业内用户 ID
+	token, err := c.getAccessToken()
+	if err != nil {
+		return nil, fmt.Errorf("获取access_token失败: %v", err)
+	}
+
+	userID, err := c.getUserIDByUnionID(token, snsResult.UserInfo.UnionID)
+	if err != nil {
+		return nil, fmt.Errorf("通过UnionID获取用户失败: %v", err)
+	}
+
+	// 4. 获取用户详细信息
+	userInfo, err := c.getUserDetail(token, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("[钉钉扫码] 用户详情: userid=%s, name=%s, mobile=%s", userInfo.UserID, userInfo.Name, userInfo.Mobile)
+	return userInfo, nil
+}
+
+// GetUserByOAuth2Code 通过 OAuth2 授权码获取用户信息（DTFrameLogin 扫码登录使用）
+// 流程：authCode → userAccessToken → contact/users/me → unionId → 企业内 userId → 用户详情
+func (c *DingTalkClient) GetUserByOAuth2Code(code string) (*IMUserInfo, error) {
+	if c.conn.IMAppID == "" || c.conn.IMAppSecret == "" {
+		return nil, fmt.Errorf("钉钉 AppKey(clientId) 或 AppSecret(clientSecret) 未配置")
+	}
+
+	// 1. 用 authCode 换取 user access token
+	tokenReqBody := fmt.Sprintf(`{"clientId":"%s","clientSecret":"%s","code":"%s","grantType":"authorization_code"}`,
+		c.conn.IMAppID, c.conn.IMAppSecret, code)
+
+	resp, err := c.httpClient.Post(dtAPIUserAccessToken, "application/json", strings.NewReader(tokenReqBody))
+	if err != nil {
+		return nil, fmt.Errorf("请求钉钉 userAccessToken 失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var tokenResult struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+		ExpireIn     int    `json:"expireIn"`
+		CorpID       string `json:"corpId"`
+	}
+	if err := json.Unmarshal(body, &tokenResult); err != nil {
+		return nil, fmt.Errorf("解析钉钉 userAccessToken 响应失败: %v", err)
+	}
+	if tokenResult.AccessToken == "" {
+		// 新版 API 错误格式
+		var errResult struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		json.Unmarshal(body, &errResult)
+		return nil, fmt.Errorf("获取 userAccessToken 失败: %s (%s)", errResult.Message, errResult.Code)
+	}
+
+	log.Printf("[钉钉扫码] 获取 userAccessToken 成功, corpId=%s", tokenResult.CorpID)
+
+	// 2. 用 user access token 获取用户基本信息（unionId）
+	meReq, _ := http.NewRequest("GET", dtAPIContactUserMe, nil)
+	meReq.Header.Set("x-acs-dingtalk-access-token", tokenResult.AccessToken)
+
+	meResp, err := c.httpClient.Do(meReq)
+	if err != nil {
+		return nil, fmt.Errorf("请求钉钉 contact/users/me 失败: %v", err)
+	}
+	defer meResp.Body.Close()
+
+	meBody, _ := io.ReadAll(meResp.Body)
+	var meResult struct {
+		Nick      string `json:"nick"`
+		UnionID   string `json:"unionId"`
+		AvatarURL string `json:"avatarUrl"`
+		Mobile    string `json:"mobile"`
+		OpenID    string `json:"openId"`
+		StateCode string `json:"stateCode"`
+	}
+	if err := json.Unmarshal(meBody, &meResult); err != nil {
+		return nil, fmt.Errorf("解析钉钉 contact/users/me 响应失败: %v", err)
+	}
+	if meResult.UnionID == "" {
+		var errResult struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		json.Unmarshal(meBody, &errResult)
+		return nil, fmt.Errorf("获取用户信息失败: %s (%s)", errResult.Message, errResult.Code)
+	}
+
+	log.Printf("[钉钉扫码] OAuth2用户信息: nick=%s, unionId=%s, mobile=%s", meResult.Nick, meResult.UnionID, meResult.Mobile)
+
+	// 3. 通过 UnionID 获取企业内 userId
+	appToken, err := c.getAccessToken()
+	if err != nil {
+		return nil, fmt.Errorf("获取应用 access_token 失败: %v", err)
+	}
+
+	userID, err := c.getUserIDByUnionID(appToken, meResult.UnionID)
+	if err != nil {
+		return nil, fmt.Errorf("通过 UnionID 获取企业用户失败: %v", err)
+	}
+
+	// 4. 获取用户详细信息
+	userInfo, err := c.getUserDetail(appToken, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("[钉钉扫码] OAuth2 用户详情: userid=%s, name=%s, mobile=%s", userInfo.UserID, userInfo.Name, userInfo.Mobile)
+	return userInfo, nil
+}
+
+// computeSNSSignature 计算 SNS 接口签名
+func (c *DingTalkClient) computeSNSSignature(timestamp string) string {
+	h := hmac.New(sha256.New, []byte(c.conn.IMAppSecret))
+	h.Write([]byte(timestamp))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
+// getUserIDByUnionID 通过 UnionID 获取企业内用户 ID
+func (c *DingTalkClient) getUserIDByUnionID(token, unionID string) (string, error) {
+	apiURL := fmt.Sprintf("%s?access_token=%s", dtAPIGetUserByUnionID, token)
+	reqBody := fmt.Sprintf(`{"unionid":"%s"}`, unionID)
+	resp, err := c.httpClient.Post(apiURL, "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("请求钉钉API失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+		Result  struct {
+			ContactType int    `json:"contact_type"`
+			UserID      string `json:"userid"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("解析钉钉响应失败: %v", err)
+	}
+	if result.ErrCode != 0 {
+		return "", fmt.Errorf("通过UnionID查询用户失败: %s (code=%d)", result.ErrMsg, result.ErrCode)
 	}
 	return result.Result.UserID, nil
 }

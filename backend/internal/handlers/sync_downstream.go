@@ -323,8 +323,7 @@ func UpdateDownstreamRule(c *gin.Context) {
 			if arr, ok := v.([]interface{}); ok {
 				b, _ := json.Marshal(arr)
 				updates["schedule_time"] = string(b)
-				updates["schedule_type"] = "times"
-				selectFields = append(selectFields, "schedule_time", "schedule_type")
+				selectFields = append(selectFields, "schedule_time")
 			}
 		} else if dbField, ok := fieldMap[k]; ok {
 			updates[dbField] = v

@@ -6,6 +6,22 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <title>用户管理平台</title>
+    <!-- 钉钉扫码登录：预连接 + 预加载 SDK -->
+    <link rel="dns-prefetch" href="//login.dingtalk.com" />
+    <link rel="dns-prefetch" href="//g.alicdn.com" />
+    <link rel="preconnect" href="https://login.dingtalk.com" crossorigin />
+    <link rel="preconnect" href="https://g.alicdn.com" crossorigin />
+    <script src="https://g.alicdn.com/dingding/h5-dingtalk-login/0.21.0/ddlogin.js" async></script>
+    <!-- 飞书扫码登录 SDK -->
+    <link rel="dns-prefetch" href="//lf-package-cn.feishucdn.com" />
+    <link rel="dns-prefetch" href="//passport.feishu.cn" />
+    <link rel="preconnect" href="https://passport.feishu.cn" crossorigin />
+    <script src="https://lf-package-cn.feishucdn.com/obj/feishu-static/lark/passport/qrcode/LarkSSOSDKWebQRCode-1.0.3.js" async></script>
+    <!-- 企业微信扫码登录 SDK -->
+    <link rel="dns-prefetch" href="//wwcdn.weixin.qq.com" />
+    <link rel="dns-prefetch" href="//open.work.weixin.qq.com" />
+    <link rel="preconnect" href="https://open.work.weixin.qq.com" crossorigin />
+    <script src="https://wwcdn.weixin.qq.com/node/wework/wwopen/js/wwLogin-1.2.7.js" async></script>
     <style>
       /* 防止白屏的基础样式 - 与 CSS 变量 --page-bg 保持一致 */
       html, body { 

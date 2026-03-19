@@ -103,10 +103,17 @@ func SyncUsersFromLDAP(conn models.Connector, rule models.SyncRule) UpstreamSync
 
 	result.UsersTotal = len(sr.Entries)
 
+	// 记录从上游同步到的用户名
+	syncedUsernames := make(map[string]bool)
+
 	// 处理每个用户
 	for _, entry := range sr.Entries {
 		detail := processLDAPEntry(conn, rule, entry, mappings)
 		result.Details = append(result.Details, detail)
+
+		if detail.LocalUser != "" {
+			syncedUsernames[strings.ToLower(detail.LocalUser)] = true
+		}
 
 		switch detail.Action {
 		case "created":
@@ -130,6 +137,12 @@ func SyncUsersFromLDAP(conn models.Connector, rule models.SyncRule) UpstreamSync
 		case "disabled":
 			result.UsersDisabled++
 		}
+	}
+
+	// 检测并禁用上游已删除的用户
+	// 安全检查：只有成功获取到用户时才执行
+	if rule.AutoDisableUser && len(syncedUsernames) > 0 {
+		result.UsersDisabled += disableRemovedUpstreamUsers(conn.ID, "ldap", syncedUsernames)
 	}
 
 	return result
@@ -376,6 +389,9 @@ func SyncUsersFromDatabase(conn models.Connector, rule models.SyncRule) Upstream
 		colIndexMap[strings.ToLower(col)] = i
 	}
 
+	// 记录从上游同步到的用户名
+	syncedUsernames := make(map[string]bool)
+
 	for rows.Next() {
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
@@ -404,6 +420,8 @@ func SyncUsersFromDatabase(conn models.Connector, rule models.SyncRule) Upstream
 			continue
 		}
 
+		syncedUsernames[strings.ToLower(username)] = true
+
 		detail := upsertLocalUser(conn, rule, username, fieldValues)
 		result.Details = append(result.Details, detail)
 
@@ -421,6 +439,11 @@ func SyncUsersFromDatabase(conn models.Connector, rule models.SyncRule) Upstream
 				DispatchSyncEvent(models.SyncEventUserUpdate, u.ID, "")
 			}
 		}
+	}
+
+	// 检测并禁用上游已删除的用户
+	if rule.AutoDisableUser && len(syncedUsernames) > 0 {
+		result.UsersDisabled += disableRemovedUpstreamUsers(conn.ID, "database", syncedUsernames)
 	}
 
 	return result
@@ -556,6 +579,9 @@ func SyncUsersFromHTTPAPI(conn models.Connector, rule models.SyncRule) UpstreamS
 	if totalPath == "" {
 		totalPath = "data.total"
 	}
+
+	// 记录从上游同步到的用户名
+	syncedUsernames := make(map[string]bool)
 
 	page := 1
 	offset := 0
@@ -725,6 +751,8 @@ func SyncUsersFromHTTPAPI(conn models.Connector, rule models.SyncRule) UpstreamS
 				continue
 			}
 
+			syncedUsernames[strings.ToLower(username)] = true
+
 			detail := upsertLocalUser(conn, rule, username, fieldValues)
 			result.Details = append(result.Details, detail)
 
@@ -768,7 +796,56 @@ func SyncUsersFromHTTPAPI(conn models.Connector, rule models.SyncRule) UpstreamS
 		offset += pageSize
 	}
 
+	// 检测并禁用上游已删除的用户
+	if rule.AutoDisableUser && len(syncedUsernames) > 0 {
+		result.UsersDisabled += disableRemovedUpstreamUsers(conn.ID, "http_api", syncedUsernames)
+	}
+
 	return result
+}
+
+// disableRemovedUpstreamUsers 禁用在上游已不存在的用户，并触发下游同步
+// connectorID: 上游连接器ID
+// sourceType: 上游类型标识 (ldap, database, http_api) - 仅用于日志
+// activeUsernames: 本次同步获取到的活跃用户名（小写）
+func disableRemovedUpstreamUsers(connectorID uint, sourceType string, activeUsernames map[string]bool) int {
+	// 获取连接器信息
+	var conn models.Connector
+	if storage.DB.First(&conn, connectorID).Error != nil {
+		return 0
+	}
+
+	// 查找该连接器同步创建的本地用户
+	// 根据用户的 source 字段匹配连接器类型
+	var localUsers []models.User
+	
+	// 构建 source 匹配条件
+	sourceConditions := []string{conn.Type}
+	switch {
+	case conn.IsLDAP():
+		sourceConditions = append(sourceConditions, "ldap", "ldap_ad", "ldap_generic", "ad", "openldap")
+	case conn.IsDatabase():
+		sourceConditions = append(sourceConditions, "mysql", "postgresql", "sqlserver", "oracle", "database")
+	case conn.IsHTTPAPI():
+		sourceConditions = append(sourceConditions, "http_api", "api")
+	}
+
+	storage.DB.Where("source IN ? AND is_deleted = 0 AND status = 1", sourceConditions).Find(&localUsers)
+
+	disabled := 0
+	for _, u := range localUsers {
+		if !activeUsernames[strings.ToLower(u.Username)] {
+			// 用户在上游已不存在，禁用本地用户
+			storage.DB.Model(&u).Update("status", 0)
+			log.Printf("[上游同步] 用户 %s 在上游(%s)已删除，已禁用本地账户", u.Username, conn.Name)
+
+			// 触发下游同步（基于本地用户状态变更，与上游类型无关）
+			DispatchSyncEvent(models.SyncEventUserDisable, u.ID, "")
+			disabled++
+		}
+	}
+
+	return disabled
 }
 
 // syncUserGroups 根据群组名称列表，自动创建群组并关联用户
@@ -791,16 +868,23 @@ func syncUserGroups(username string, groupNames []string) {
 	primaryGroupName := groupNames[0]
 
 	var group models.UserGroup
+	isNewGroup := false
 	if storage.DB.Where("name = ?", primaryGroupName).First(&group).Error != nil {
 		group = models.UserGroup{
 			Name:     primaryGroupName,
 			ParentID: rootID,
 		}
 		if err := storage.DB.Create(&group).Error; err != nil {
-			log.Printf("[HTTPAPISync] 创建群组 %s 失败: %v", primaryGroupName, err)
+			log.Printf("[上游同步] 创建群组 %s 失败: %v", primaryGroupName, err)
 			return
 		}
-		log.Printf("[HTTPAPISync] 自动创建群组: %s (id=%d)", primaryGroupName, group.ID)
+		isNewGroup = true
+		log.Printf("[上游同步] 自动创建群组: %s (id=%d)", primaryGroupName, group.ID)
+	}
+
+	// 新建群组时同步到下游
+	if isNewGroup {
+		go SyncGroupToDownstream(group, "group_create", "", 0)
 	}
 
 	if user.GroupID != group.ID {
@@ -830,16 +914,25 @@ func syncUserGroupsByPath(username string, path string) {
 		}
 
 		var group models.UserGroup
+		isNewGroup := false
 		if storage.DB.Where("name = ? AND parent_id = ?", name, parentID).First(&group).Error != nil {
 			group = models.UserGroup{
 				Name:     name,
 				ParentID: parentID,
 			}
 			if err := storage.DB.Create(&group).Error; err != nil {
-				log.Printf("[HTTPAPISync] 创建群组 %s (parent=%d) 失败: %v", name, parentID, err)
+				log.Printf("[上游同步] 创建群组 %s (parent=%d) 失败: %v", name, parentID, err)
 				return
 			}
+			isNewGroup = true
+			log.Printf("[上游同步] 自动创建群组: %s (id=%d, parent=%d)", name, group.ID, parentID)
 		}
+
+		// 新建群组时同步到下游
+		if isNewGroup {
+			go SyncGroupToDownstream(group, "group_create", "", 0)
+		}
+
 		parentID = group.ID
 		lastGroup = group
 	}

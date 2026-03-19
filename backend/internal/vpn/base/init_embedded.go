@@ -79,8 +79,12 @@ func initCfgFromViper() {
 	confDir := filepath.Dir(linkViper.ConfigFileUsed())
 	workDir, _ := os.Getwd()
 
-	// 转换相对路径为绝对路径
-	if Cfg.DbSource != "" && !filepath.IsAbs(Cfg.DbSource) {
+	// 转换相对路径为绝对路径（仅针对 SQLite 文件路径，不处理 PostgreSQL/MySQL 等 DSN 字符串）
+	// SQLite 路径特征：不包含 "host=" 或 "://" 等 DSN 特征
+	if Cfg.DbSource != "" && !filepath.IsAbs(Cfg.DbSource) &&
+		!strings.Contains(Cfg.DbSource, "host=") &&
+		!strings.Contains(Cfg.DbSource, "://") &&
+		!strings.Contains(Cfg.DbSource, "@tcp(") {
 		Cfg.DbSource = filepath.Join(workDir, Cfg.DbSource)
 	}
 	if Cfg.CertFile != "" && !filepath.IsAbs(Cfg.CertFile) {

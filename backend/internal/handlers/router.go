@@ -38,6 +38,7 @@ func RegisterRoutes(r *gin.Engine) {
 	r.GET("/saml/:appCode/metadata", SAMLMetadata)
 	r.POST("/saml/:appCode/sso", SAMLSso)
 
+
 	// 静态文件服务
 	staticDir := "./static"
 	if _, err := os.Stat(staticDir); err == nil {
@@ -45,8 +46,14 @@ func RegisterRoutes(r *gin.Engine) {
 		r.StaticFile("/favicon.ico", filepath.Join(staticDir, "favicon.ico"))
 
 		r.NoRoute(func(c *gin.Context) {
-			if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
+			path := c.Request.URL.Path
+			if len(path) >= 4 && path[:4] == "/api" {
 				c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "接口不存在"})
+				return
+			}
+			// WebSocket 路径不走静态文件
+			if len(path) >= 3 && path[:3] == "/ws" {
+				c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "WebSocket endpoint not found"})
 				return
 			}
 			c.File(filepath.Join(staticDir, "index.html"))
@@ -57,6 +64,9 @@ func RegisterRoutes(r *gin.Engine) {
 	api.Use(middleware.IPWhitelistMiddleware())
 	api.Use(middleware.RateLimitMiddleware())
 	{
+		// WebSocket 实时仪表盘（公开，无需认证）
+		api.GET("/ws/dashboard", DashboardWebSocket)
+
 		// ========== 公开接口 ==========
 		api.GET("/auth/csrf", GetLoginCSRFToken)
 		api.POST("/auth/login", middleware.LoginRateLimitMiddleware(), Login)
@@ -75,6 +85,9 @@ func RegisterRoutes(r *gin.Engine) {
 		// SSO 免登（公开）
 		api.GET("/auth/sso-providers", GetSSOProviders)
 		api.POST("/auth/sso/login", SSOLogin)
+		api.POST("/auth/dingtalk-qr/login", DingTalkQRLogin)
+		api.POST("/auth/feishu-qr/login", FeishuQRLogin)
+		api.POST("/auth/wechatwork-qr/login", WeChatWorkQRLogin)
 
 		// ========== 需要登录的接口 ==========
 		auth := api.Group("")
@@ -207,6 +220,7 @@ func RegisterRoutes(r *gin.Engine) {
 
 			// 系统状态
 			auth.GET("/system/status", middleware.PermissionMiddleware("settings:system"), GetSystemStatus)
+			auth.GET("/dashboard/stats", middleware.PermissionMiddleware("settings:system"), GetDashboardStats)
 
 			// ========== 安全中心 ==========
 			auth.GET("/security/dashboard", middleware.PermissionMiddleware("settings:system"), GetSecurityDashboard)
@@ -325,6 +339,11 @@ func RegisterRoutes(r *gin.Engine) {
 			auth.POST("/sync/downstream/rules/:id/trigger", syncPerm, TriggerDownstreamSync)
 			auth.GET("/sync/downstream/rules/:id/mappings", syncPerm, ListDownstreamRuleMappings)
 			auth.PUT("/sync/downstream/rules/:id/mappings", syncPerm, BatchUpdateDownstreamRuleMappings)
+
+			// 同步诊断
+			auth.GET("/sync/downstream/connectors/:id/diagnose", syncPerm, DiagnoseDownstreamSync)
+			auth.GET("/sync/users/syncable", syncPerm, GetSyncableUsers)
+			auth.GET("/sync/users/unsyncable", syncPerm, GetUnsyncableUsers)
 
 			// 连接器类型列表
 			auth.GET("/sync/connector-types", syncPerm, GetConnectorTypes)
@@ -611,7 +630,7 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 		c.Header("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://g.alicdn.com https://*.dingtalk.com https://open.feishu.cn https://open.work.weixin.qq.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ws: wss: https://*.dingtalk.com https://oapi.dingtalk.com https://open.feishu.cn https://qyapi.weixin.qq.com; frame-ancestors 'self' https://*.dingtalk.com https://*.feishu.cn")
+		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://g.alicdn.com https://*.dingtalk.com https://open.feishu.cn https://open.work.weixin.qq.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ws: wss: https://*.dingtalk.com https://oapi.dingtalk.com https://open.feishu.cn https://qyapi.weixin.qq.com; frame-src 'self' https://login.dingtalk.com https://*.dingtalk.com https://open.feishu.cn https://open.work.weixin.qq.com; frame-ancestors 'self' https://*.dingtalk.com https://*.feishu.cn")
 		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
 			c.Header("Cache-Control", "no-store, no-cache, must-revalidate, private")
 			c.Header("Pragma", "no-cache")

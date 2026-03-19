@@ -8,12 +8,12 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-OUTPUT_NAME="${1:-go-syncflow-v3.5-$(date +%Y%m%d)}"
+OUTPUT_NAME="${1:-go-syncflow-v3.6-$(date +%Y%m%d)}"
 OUTPUT_FILE="/tmp/${OUTPUT_NAME}.tar.gz"
 
 echo "=========================================="
 echo "    Go-SyncFlow 统一身份同步与管理平台"
-echo "      打包工具 v3.5 (全功能离线版)"
+echo "      打包工具 v3.6 (精简离线版)"
 echo "=========================================="
 
 cd "$PROJECT_DIR"
@@ -22,8 +22,8 @@ cd "$PROJECT_DIR"
 echo ""
 echo "[1/7] 编译后端..."
 cd "$PROJECT_DIR/backend"
-CGO_ENABLED=1 go build -o go-syncflow . 2>&1
-echo "  [✓] 后端编译完成"
+CGO_ENABLED=1 go build -ldflags="-s -w" -o go-syncflow . 2>&1
+echo "  [✓] 后端编译完成（已strip调试信息）"
 
 echo "[2/7] 构建前端..."
 cd "$PROJECT_DIR/frontend"
@@ -40,34 +40,70 @@ cd "$PROJECT_DIR"
 echo "[3/7] 准备打包目录..."
 PACK_DIR="/tmp/go-syncflow-pack"
 rm -rf "$PACK_DIR"
-mkdir -p "$PACK_DIR/Go-SyncFlow"
+mkdir -p "$PACK_DIR/Go-SyncFlow/backend"
 
-# ========== 步骤 3：复制文件 ==========
-echo "[4/7] 复制文件..."
+# ========== 步骤 3：复制文件（精简模式：只复制必要文件）==========
+echo "[4/7] 复制必要文件..."
 
-# 复制后端（含预编译二进制和静态文件）
-cp -r backend "$PACK_DIR/Go-SyncFlow/"
-# 清理可能存在的旧目录
-rm -rf "$PACK_DIR/Go-SyncFlow/backend/web"
-echo "  - 后端目录已复制"
+DEST="$PACK_DIR/Go-SyncFlow"
 
-# 复制脚本
-cp -r scripts "$PACK_DIR/Go-SyncFlow/"
-echo "  - 脚本已复制"
+# ---- 复制后端二进制 ----
+cp "$PROJECT_DIR/backend/go-syncflow" "$DEST/backend/"
+echo "  - 后端二进制已复制"
 
-# 不打包 frontend（前端已编译到 backend/static/，运行时不需要源码和 node_modules）
-# 不打包 tooling（Go 安装包，部署时不需要编译）
+# ---- 复制前端静态资源 ----
+cp -r "$PROJECT_DIR/backend/static" "$DEST/backend/"
+echo "  - 前端静态资源已复制"
 
-# ========== 内置 PostgreSQL ==========
+# ---- 复制必要的配置文件（但不包含敏感数据）----
+mkdir -p "$DEST/backend/data"
+# 复制默认数据库配置
+cat > "$DEST/backend/data/database.yaml" << 'DBCONFIG'
+# Go-SyncFlow PostgreSQL 数据库配置
+# 内置 PostgreSQL，开箱即用
+
+host: 127.0.0.1
+port: 5432
+user: syncflow
+password: syncflow
+database: go_syncflow
+sslmode: disable
+max_idle: 10
+max_open: 100
+DBCONFIG
+echo "  - 默认配置文件已创建"
+
+# ---- 复制 VPN 客户端安装包（如存在）----
+if [ -d "$PROJECT_DIR/backend/data/vpn/conf/files" ]; then
+    mkdir -p "$DEST/backend/data/vpn/conf/files"
+    # 复制所有子目录（android/, macos/, windows/）
+    cp -r "$PROJECT_DIR/backend/data/vpn/conf/files"/* "$DEST/backend/data/vpn/conf/files/" 2>/dev/null || true
+    # 去除根目录重复的 macOS 安装包（子目录已有）
+    rm -f "$DEST/backend/data/vpn/conf/files/anyconnect-macos-intel.dmg" 2>/dev/null
+    rm -f "$DEST/backend/data/vpn/conf/files/cisco-secure-client-macos-apple-silicon.dmg" 2>/dev/null
+    VPN_FILES_SIZE=$(du -sh "$DEST/backend/data/vpn/conf/files" 2>/dev/null | cut -f1)
+    echo "  - VPN 客户端安装包已复制 ($VPN_FILES_SIZE)"
+else
+    echo "  [!] 警告：未找到 VPN 客户端安装包"
+fi
+
+# ---- 复制脚本（只复制部署必须的）----
+mkdir -p "$DEST/scripts"
+for script in start.sh stop.sh restart.sh reset-admin.sh enable-external-db.sh; do
+    [ -f "$PROJECT_DIR/scripts/$script" ] && cp "$PROJECT_DIR/scripts/$script" "$DEST/scripts/"
+done
+echo "  - 部署脚本已复制"
+
+# ---- 内置 PostgreSQL ----
 echo "  - 打包内置 PostgreSQL..."
-mkdir -p "$PACK_DIR/Go-SyncFlow/postgres"
+mkdir -p "$DEST/postgres"
 
 PG_PACKED=false
 
-# 方式1：优先使用项目内置的 PostgreSQL（从之前的打包中获取）
+# 方式1：优先使用项目内置的 PostgreSQL
 if [ -d "$PROJECT_DIR/postgres/bin" ] && [ -f "$PROJECT_DIR/postgres/bin/postgres" ]; then
     echo "    - 检测到项目内置 PostgreSQL"
-    cp -r "$PROJECT_DIR/postgres"/* "$PACK_DIR/Go-SyncFlow/postgres/"
+    cp -r "$PROJECT_DIR/postgres"/* "$DEST/postgres/"
     echo "    [✓] 项目内置 PostgreSQL 已复制"
     PG_PACKED=true
 fi
@@ -90,27 +126,25 @@ if [ "$PG_PACKED" = false ]; then
         echo "    - 检测到系统 PostgreSQL $PG_VERSION"
         
         # 复制二进制
-        mkdir -p "$PACK_DIR/Go-SyncFlow/postgres/bin"
+        mkdir -p "$DEST/postgres/bin"
         for bin in postgres initdb pg_ctl psql createdb createuser pg_dump pg_restore; do
-            if [ -f "$PG_BIN_DIR/$bin" ]; then
-                cp -f "$PG_BIN_DIR/$bin" "$PACK_DIR/Go-SyncFlow/postgres/bin/"
-            fi
+            [ -f "$PG_BIN_DIR/$bin" ] && cp -f "$PG_BIN_DIR/$bin" "$DEST/postgres/bin/"
         done
         echo "    [✓] PostgreSQL 二进制已复制"
         
         # 复制库文件
-        mkdir -p "$PACK_DIR/Go-SyncFlow/postgres/lib"
-        cp -a "$PG_LIB_DIR"/* "$PACK_DIR/Go-SyncFlow/postgres/lib/" 2>/dev/null || true
+        mkdir -p "$DEST/postgres/lib"
+        cp -a "$PG_LIB_DIR"/* "$DEST/postgres/lib/" 2>/dev/null || true
         
         # 复制系统库依赖
         for lib in libpq libssl libcrypto libreadline libtinfo libncurses liblz4 libzstd libicuuc libicudata libicui18n; do
-            find /usr/lib/x86_64-linux-gnu -name "${lib}.so*" -exec cp -a {} "$PACK_DIR/Go-SyncFlow/postgres/lib/" \; 2>/dev/null || true
+            find /usr/lib/x86_64-linux-gnu -name "${lib}.so*" -exec cp -a {} "$DEST/postgres/lib/" \; 2>/dev/null || true
         done
         echo "    [✓] PostgreSQL 库文件已复制"
         
         # 复制 share 目录
         if [ -d "$PG_SHARE_DIR" ]; then
-            cp -r "$PG_SHARE_DIR" "$PACK_DIR/Go-SyncFlow/postgres/share"
+            cp -r "$PG_SHARE_DIR" "$DEST/postgres/share"
             echo "    [✓] PostgreSQL share 目录已复制"
         fi
         PG_PACKED=true
@@ -121,118 +155,54 @@ if [ "$PG_PACKED" = false ]; then
     echo "    [!] 警告：未找到 PostgreSQL，部署时需要手动安装"
 fi
 
-# 复制文档（只复制用户文档，排除开发/集成文档）
-if [ -d "docs" ]; then
-    mkdir -p "$PACK_DIR/Go-SyncFlow/docs"
-    for doc in "系统使用手册.md" "VPN使用手册.md" "SSO使用手册.md" "功能文档.md" "技术架构文档.md" "API接口文档.md" "SSO接入指南（CAS-SAML-OIDC）.md" "ThirdParty-API-SSO-Auth.md"; do
-        [ -f "docs/$doc" ] && cp "docs/$doc" "$PACK_DIR/Go-SyncFlow/docs/"
-    done
-    find docs -maxdepth 1 -name "*.pdf" -exec cp {} "$PACK_DIR/Go-SyncFlow/docs/" \; 2>/dev/null || true
-    echo "  [✓] 用户文档已复制（已排除开发/集成/模板文档）"
-fi
-cp -f README.md "$PACK_DIR/Go-SyncFlow/" 2>/dev/null || true
-cp -f 快速部署说明.txt "$PACK_DIR/Go-SyncFlow/" 2>/dev/null || true
+# ---- 复制必要的文档（只保留用户手册 PDF）----
+mkdir -p "$DEST/docs"
+for pdf in "系统使用手册.pdf" "VPN使用手册.pdf" "SSO使用手册.pdf" "功能文档.pdf" "API接口文档.pdf"; do
+    [ -f "$PROJECT_DIR/docs/$pdf" ] && cp "$PROJECT_DIR/docs/$pdf" "$DEST/docs/"
+done
+echo "  - 用户文档已复制（仅PDF）"
 
+# ---- 复制 README ----
+cp -f "$PROJECT_DIR/README.md" "$DEST/" 2>/dev/null || true
+cp -f "$PROJECT_DIR/快速部署说明.txt" "$DEST/" 2>/dev/null || true
 
-# ========== 步骤 4：清理敏感数据 ==========
-echo "[5/7] 清理敏感数据..."
+# ========== 步骤 5：清理敏感数据 ==========
+echo "[5/7] 清理敏感/无用数据..."
 
-DEST="$PACK_DIR/Go-SyncFlow"
+# ---- 删除所有源码相关文件（后端已是精简复制，但double check）----
+find "$DEST" -name "*.go" -delete 2>/dev/null || true
+rm -f "$DEST/backend/go.mod" "$DEST/backend/go.sum" 2>/dev/null || true
+echo "  - Go 源码已清除"
 
-# ---- 清理旧数据 ----
-rm -rf "$DEST/backend/data/certs"
-rm -rf "$DEST/backend/data/jwt_secret"
-# 数据库配置保持默认（使用内置 PostgreSQL）
-echo "  - 数据目录已清理"
-# 清理 VPN 目录中的敏感数据，但保留配置模板
-if [ -d "$DEST/backend/data/vpn/conf" ]; then
-    # 保留 vpn.db 中的 setting 表配置（页面标题等），清除用户数据
-    if [ -f "$DEST/backend/data/vpn/conf/vpn.db" ]; then
-        # 创建干净的默认配置数据库
-        python3 -c "
-import sqlite3
-import json
-import os
-
-db_path = '$DEST/backend/data/vpn/conf/vpn.db'
-conn = sqlite3.connect(db_path)
-cursor = conn.cursor()
-
-# 清除用户敏感数据
-cursor.execute('DELETE FROM user')
-cursor.execute('DELETE FROM user_act_log')
-cursor.execute('DELETE FROM access_audit')
-cursor.execute('DELETE FROM ip_map')
-cursor.execute('DELETE FROM stats_network')
-cursor.execute('DELETE FROM stats_cpu')
-cursor.execute('DELETE FROM stats_mem')
-cursor.execute('DELETE FROM stats_online')
-
-# 重置序列
-cursor.execute(\"DELETE FROM sqlite_sequence WHERE name IN ('user', 'user_act_log', 'access_audit', 'ip_map')\")
-
-conn.commit()
-conn.close()
-print('  - VPN 数据库已清理用户数据，保留服务配置')
-" 2>/dev/null || {
-            # 如果 python 清理失败，直接删除
-            rm -f "$DEST/backend/data/vpn/conf/vpn.db"
-            echo "  - VPN 数据库已删除（Python 清理失败）"
-        }
-    fi
-    rm -f "$DEST/backend/data/vpn/conf/vpn_cert.pem"
-    rm -f "$DEST/backend/data/vpn/conf/vpn_cert.key"
-    echo "  - VPN 证书已清除"
-    # 去除重复的 VPN 客户端安装包（根目录与子目录重复）
-    if [ -d "$DEST/backend/data/vpn/conf/files" ]; then
-        rm -f "$DEST/backend/data/vpn/conf/files/anyconnect-macos-intel.dmg"
-        rm -f "$DEST/backend/data/vpn/conf/files/cisco-secure-client-macos-apple-silicon.dmg"
-        echo "  - 已去除根目录重复的 macOS 安装包（macos/ 子目录保留）"
-        VPN_FILES_SIZE=$(du -sh "$DEST/backend/data/vpn/conf/files" | cut -f1)
-        echo "  [✓] VPN 客户端安装包已保留 ($VPN_FILES_SIZE)"
-    else
-        echo "  [!] 警告：未找到 VPN 客户端安装包，443下载页面将无文件可下载"
-    fi
-fi
-
-# ---- 证书和密钥 ----
-rm -rf "$DEST/backend/certs"
-find "$DEST" \( -name "jwt_secret" -o -name "*.pem" -o -name "*.key" -o -name "*.crt" \) ! -path "*/vpn/conf/*" -exec rm -f {} + 2>/dev/null || true
-echo "  - 证书和密钥已清除"
-
-# ---- 日志文件 ----
-find "$DEST" -name "*.log" -exec rm -f {} + 2>/dev/null || true
+# ---- 删除所有日志文件 ----
+find "$DEST" -name "*.log" -delete 2>/dev/null || true
 echo "  - 日志文件已清除"
 
-# ---- 旧编译产物 ----
-rm -f "$DEST/backend/server"
-rm -f "$DEST/backend/bi-dashboard"
+# ---- 删除证书和密钥 ----
+find "$DEST" \( -name "jwt_secret" -o -name "*.pem" -o -name "*.key" -o -name "*.crt" \) -delete 2>/dev/null || true
+echo "  - 证书和密钥已清除"
 
-# ---- Go 源码（新机器不需要编译）----
-find "$DEST/backend" -name "*.go" -exec rm -f {} + 2>/dev/null || true
-rm -f "$DEST/backend/go.mod" "$DEST/backend/go.sum"
-echo "  - Go 源码已清除（使用预编译二进制）"
+# ---- 删除 SQLite 数据库（VPN 数据库也清除，首次运行会自动创建）----
+find "$DEST" \( -name "*.db" -o -name "*.sqlite" -o -name "*.sqlite3" \) -delete 2>/dev/null || true
+echo "  - 数据库文件已清除"
 
-# ---- 其他 ----
-rm -rf "$DEST/.git"
+# ---- 删除旧编译产物名称 ----
+rm -f "$DEST/backend/server" "$DEST/backend/bi-dashboard" 2>/dev/null || true
 
-# ---- 清理多余的打包脚本 ----
-rm -f "$DEST/scripts/pack-full.sh"
-rm -f "$DEST/docs/generate-pdf.sh"
-rm -f "$DEST/docs/template.tex"
-rm -f "$DEST/docs/vpn-landing-page-sample.html"
+# ---- 删除 .git ----
+rm -rf "$DEST/.git" 2>/dev/null || true
 
-# ---- 清理 SQLite 相关（已废弃，但保留 VPN 配置数据库）----
-find "$DEST" \( -name "*.db" -o -name "*.sqlite" -o -name "*.sqlite3" \) ! -name "vpn.db" -exec rm -f {} + 2>/dev/null || true
+# ---- 删除旧打包脚本（保留 pack.sh 用于二次打包）----
+rm -f "$DEST/scripts/pack-full.sh" 2>/dev/null || true
 
-echo "  [OK] 全部敏感数据已清理"
+echo "  [OK] 清理完成"
 
-# ========== 步骤 5：确保脚本可执行 ==========
+# ========== 步骤 6：确保脚本可执行 ==========
 echo "[6/7] 设置文件权限..."
 chmod +x "$DEST/scripts/"*.sh
 chmod +x "$DEST/backend/go-syncflow"
 
-# ========== 步骤 6：打包 ==========
+# ========== 步骤 7：打包 ==========
 echo "[7/7] 压缩打包..."
 
 cd /tmp
@@ -255,12 +225,18 @@ echo "输出文件: $PROJECT_DIR/${OUTPUT_NAME}.tar.gz"
 echo "文件大小: $FILE_SIZE"
 echo ""
 echo "包含内容："
-echo "  [✓] 后端预编译二进制（go-syncflow）"
+echo "  [✓] 后端预编译二进制（go-syncflow，已strip）"
 echo "  [✓] 前端静态资源（backend/static/）"
-echo "  [✓] VPN 客户端安装包（443下载页面）"
+echo "  [✓] VPN 客户端安装包（backend/data/vpn/）"
 echo "  [✓] PostgreSQL 数据库依赖（postgres/）"
 echo "  [✓] 部署脚本（scripts/）"
-echo "  [✓] 用户文档（docs/）"
+echo "  [✓] 用户文档 PDF（docs/）"
+echo ""
+echo "已排除内容："
+echo "  [×] Go/Node.js 源代码"
+echo "  [×] 开发文档、模板文件"
+echo "  [×] 数据库数据、日志文件"
+echo "  [×] 证书、密钥、敏感配置"
 echo ""
 echo "=========================================="
 echo "  部署方法（一键部署）"
@@ -286,7 +262,5 @@ echo ""
 echo "  说明："
 echo "  - 内置 PostgreSQL 数据库，开箱即用"
 echo "  - 包含预编译二进制，无需在新机器上编译"
-echo "  - VPN 443端口自带客户端下载页面及安装包"
 echo "  - 首次启动自动初始化 PostgreSQL 和应用数据"
-echo "  - 通知渠道、同步连接器等需在界面中配置"
 echo ""

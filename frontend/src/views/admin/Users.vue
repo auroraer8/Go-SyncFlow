@@ -421,13 +421,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus, FolderAdd, MoreFilled, Refresh, RefreshRight, Iphone, ChatDotRound, Download, Delete } from "@element-plus/icons-vue";
 import { userApi, roleApi, groupApi, dingtalkApi, settingsApi, securityApi, syncApi, api } from "../../api";
 import { useUserStore } from "../../store/user";
+import { useWebSocketStore } from "../../store/websocket";
 
 const userStore = useUserStore();
+const wsStore = useWebSocketStore();
+
+// WebSocket 取消订阅函数
+let wsUnsubscribe: (() => void) | null = null;
 const canCreate = computed(() => userStore.hasPermission('user:create'));
 const canUpdate = computed(() => userStore.hasPermission('user:update'));
 const canDelete = computed(() => userStore.hasPermission('user:delete'));
@@ -1283,6 +1288,28 @@ onMounted(async () => {
       }
     }).catch(() => {});
   }
+  
+  // 订阅用户和群组变更事件（实时刷新）
+  wsStore.connect();
+  const unsub1 = wsStore.subscribe('user_change', (data) => {
+    console.log('[用户管理] 收到用户变更事件:', data);
+    // 刷新用户列表和分组计数
+    loadUsers();
+    loadGroups();
+  });
+  const unsub2 = wsStore.subscribe('group_change', (data) => {
+    console.log('[用户管理] 收到群组变更事件:', data);
+    loadGroups();
+    loadUsers();
+  });
+  wsUnsubscribe = () => {
+    unsub1();
+    unsub2();
+  };
+});
+
+onUnmounted(() => {
+  if (wsUnsubscribe) wsUnsubscribe();
 });
 </script>
 

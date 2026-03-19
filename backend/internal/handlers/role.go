@@ -10,6 +10,7 @@ import (
 	"go-syncflow/internal/middleware"
 	"go-syncflow/internal/models"
 	"go-syncflow/internal/storage"
+	"go-syncflow/internal/sync"
 )
 
 func ListRoles(c *gin.Context) {
@@ -51,6 +52,13 @@ func CreateRole(c *gin.Context) {
 	}
 
 	middleware.RecordOperationLog(c, "角色管理", "新增角色", req.Name, "")
+	
+	// 同步角色到下游
+	go sync.SyncRoleToDownstream(role, "role_create")
+	
+	// 广播角色创建事件
+	BroadcastRoleChange("created", role.ID, role.Name)
+	
 	respondOK(c, role)
 }
 
@@ -97,8 +105,18 @@ func UpdateRole(c *gin.Context) {
 	updates["landing_page"] = req.LandingPage
 
 	storage.DB.Model(&role).Updates(updates)
+	
+	// 重新加载角色数据用于下游同步
+	storage.DB.First(&role, id)
 
 	middleware.RecordOperationLog(c, "角色管理", "编辑角色", req.Name, "")
+	
+	// 同步角色到下游
+	go sync.SyncRoleToDownstream(role, "role_update")
+	
+	// 广播角色更新事件
+	BroadcastRoleChange("updated", uint(id), req.Name)
+	
 	respondOK(c, nil)
 }
 
@@ -124,10 +142,18 @@ func DeleteRole(c *gin.Context) {
 		return
 	}
 
+	// 先同步删除到下游（需要在本地删除前执行）
+	sync.SyncRoleToDownstream(role, "role_delete")
+	
+	roleName := role.Name
 	storage.DB.Delete(&models.Role{}, id)
 	storage.DB.Where("role_id = ?", id).Delete(&models.RolePermission{})
 
 	middleware.RecordOperationLog(c, "角色管理", "删除角色", strconv.FormatUint(id, 10), "")
+	
+	// 广播角色删除事件
+	BroadcastRoleChange("deleted", uint(id), roleName)
+	
 	respondOK(c, nil)
 }
 

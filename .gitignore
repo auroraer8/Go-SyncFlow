@@ -4,9 +4,14 @@
 
 # ---------- 编译产物 ----------
 backend/go-syncflow
+backend/syncflow
+backend/syncflow-server
 backend/bi-dashboard-bin
 backend/bi-dashboard-run
 backend/static/
+
+# ---------- 运行时数据库 ----------
+backend/*.db
 
 # 前端编译产物
 frontend/dist/

@@ -325,7 +325,8 @@ export const ldapApi = {
 
 // 系统状态接口
 export const systemApi = {
-  status: () => api.get("/system/status")
+  status: () => api.get("/system/status"),
+  dashboardStats: () => api.get("/dashboard/stats")
 };
 
 // 钉钉组织架构同步接口
@@ -468,9 +469,17 @@ export const syncApi = {
   triggerDownstreamRule: (id: number) => api.post(`/sync/downstream/rules/${id}/trigger`, {}, { timeout: 300000 }),
   downstreamRuleMappings: (id: number) => api.get(`/sync/downstream/rules/${id}/mappings`),
   updateDownstreamRuleMappings: (id: number, mappings: any[]) => api.put(`/sync/downstream/rules/${id}/mappings`, { mappings }),
+  // 同步诊断
+  diagnoseDownstreamConnector: (id: number) => api.get(`/sync/downstream/connectors/${id}/diagnose`, { timeout: 60000 }),
+  getSyncableUsers: () => api.get("/sync/users/syncable"),
+  getUnsyncableUsers: () => api.get("/sync/users/unsyncable"),
   // SSO providers
   ssoProviders: () => api.get("/auth/sso-providers"),
   ssoLogin: (data: { connectorId: number; platform: string; authCode: string }) => api.post("/auth/sso/login", data),
+  // 扫码登录
+  dingtalkQRLogin: (data: { connectorId: number; code: string }) => api.post("/auth/dingtalk-qr/login", data),
+  feishuQRLogin: (data: { connectorId: number; code: string }) => api.post("/auth/feishu-qr/login", data),
+  wechatworkQRLogin: (data: { connectorId: number; code: string }) => api.post("/auth/wechatwork-qr/login", data),
 };
 
 // API调用日志 + 日志设置

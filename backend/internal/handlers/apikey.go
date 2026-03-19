@@ -493,6 +493,26 @@ func APIKeyAuthMiddleware() gin.HandlerFunc {
 			}
 		}
 
+		// 解析权限配置
+		var permissions []string
+		if apiKeyRecord.Permissions != "" && apiKeyRecord.Permissions != "[]" {
+			json.Unmarshal([]byte(apiKeyRecord.Permissions), &permissions)
+		}
+
+		// 检查 API 权限
+		if len(permissions) > 0 {
+			// 从请求路径和方法推断所需权限
+			requiredPerm := inferPermissionFromRequest(c.Request.Method, c.Request.URL.Path)
+			if requiredPerm != "" && !hasAPIPermission(permissions, requiredPerm) {
+				c.JSON(http.StatusForbidden, gin.H{
+					"success": false,
+					"message": fmt.Sprintf("API密钥无此权限: %s", requiredPerm),
+				})
+				c.Abort()
+				return
+			}
+		}
+
 		// 更新使用统计（异步）
 		go func() {
 			now := time.Now()
@@ -507,6 +527,7 @@ func APIKeyAuthMiddleware() gin.HandlerFunc {
 		c.Set("apiKeyId", apiKeyRecord.ID)
 		c.Set("apiKeyAppId", apiKeyRecord.AppID)
 		c.Set("apiKeyName", apiKeyRecord.Name)
+		c.Set("apiKeyPermissions", permissions)
 		// 标记为 API Key 认证（区别于 JWT 认证）
 		c.Set("authType", "apikey")
 
@@ -516,6 +537,111 @@ func APIKeyAuthMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// inferPermissionFromRequest 从请求路径和方法推断所需权限
+func inferPermissionFromRequest(method, path string) string {
+	// 移除前缀 /api/open/
+	path = strings.TrimPrefix(path, "/api/open/")
+	path = strings.TrimPrefix(path, "/")
+
+	// 提取资源类型（第一段路径）
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	resource := parts[0]
+
+	// 资源映射
+	resourceMap := map[string]string{
+		"users":       "user",
+		"groups":      "group",
+		"roles":       "role",
+		"sso":         "sso",
+		"vpn":         "vpn",
+		"sync":        "sync",
+		"connectors":  "sync",
+		"logs":        "log",
+		"security":    "security",
+		"settings":    "settings",
+		"apikeys":     "apikey",
+		"notify":      "notify",
+		"dingtalk":    "sync",
+		"system":      "system",
+		"auth":        "auth",
+	}
+
+	resourceType, ok := resourceMap[resource]
+	if !ok {
+		resourceType = resource
+	}
+
+	// 方法映射到操作
+	var action string
+	switch method {
+	case "GET":
+		action = "read"
+	case "POST":
+		// 特殊处理某些 POST 操作
+		if strings.Contains(path, "/trigger") || strings.Contains(path, "/sync") {
+			action = "execute"
+		} else if strings.Contains(path, "/test") {
+			action = "read"
+		} else {
+			action = "write"
+		}
+	case "PUT", "PATCH":
+		action = "write"
+	case "DELETE":
+		action = "delete"
+	default:
+		action = "read"
+	}
+
+	return fmt.Sprintf("%s:%s", resourceType, action)
+}
+
+// hasAPIPermission 检查是否拥有所需权限
+func hasAPIPermission(permissions []string, required string) bool {
+	// 解析所需权限
+	reqParts := strings.Split(required, ":")
+	if len(reqParts) != 2 {
+		return true // 无法解析则放行
+	}
+	reqResource := reqParts[0]
+	reqAction := reqParts[1]
+
+	for _, perm := range permissions {
+		permParts := strings.Split(perm, ":")
+		if len(permParts) != 2 {
+			continue
+		}
+		permResource := permParts[0]
+		permAction := permParts[1]
+
+		// 检查资源匹配
+		if permResource != "*" && permResource != reqResource {
+			continue
+		}
+
+		// 检查操作匹配
+		if permAction == "*" || permAction == "all" {
+			return true // 拥有该资源的全部权限
+		}
+		if permAction == reqAction {
+			return true
+		}
+		// write 权限包含 read
+		if permAction == "write" && reqAction == "read" {
+			return true
+		}
+		// all/full 权限包含所有操作
+		if permAction == "full" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // matchIP 简单 IP 匹配（支持精确匹配和 CIDR 前缀匹配）
@@ -559,14 +685,27 @@ func matchIP(clientIP, pattern string) bool {
 // ========== API Key 安全限制中间件 ==========
 
 // APIKeySafetyMiddleware 开放 API 安全限制
-// 禁止通过 API 操作 admin 用户、分配超级管理员角色
+// 禁止通过 API：操作 admin 用户、分配超级管理员角色、创建/删除 API 密钥
 func APIKeySafetyMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		method := c.Request.Method
 
-		// 仅对涉及用户操作的路径进行检查
-		// 检查是否操作指定用户（/open/users/:id 路径）
+		// ========== 禁止通过 API 操作 API 密钥 ==========
+		// API 密钥只能通过管理后台界面创建/删除/重置，防止权限滥用
+		if strings.Contains(path, "/open/apikeys") {
+			// 允许查看列表和详情（GET 请求）
+			if method != "GET" {
+				c.JSON(http.StatusForbidden, gin.H{
+					"success": false,
+					"message": "API 安全限制：不允许通过 API 创建、修改或删除 API 密钥，请在管理后台操作",
+				})
+				c.Abort()
+				return
+			}
+		}
+
+		// ========== 禁止通过 API 操作 admin 用户 ==========
 		if strings.Contains(path, "/open/users/") && method != "POST" {
 			idStr := c.Param("id")
 			if idStr != "" {
@@ -584,6 +723,7 @@ func APIKeySafetyMiddleware() gin.HandlerFunc {
 			}
 		}
 
+		// ========== 禁止通过 API 分配超级管理员角色 ==========
 		// 检查创建用户时是否包含超级管理员角色
 		if method == "POST" && strings.HasSuffix(path, "/open/users") {
 			if containsSuperAdminRole(c) {

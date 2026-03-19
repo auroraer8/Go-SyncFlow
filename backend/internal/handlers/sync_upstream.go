@@ -67,6 +67,7 @@ func CreateUpstreamConnector(c *gin.Context) {
 	if v, ok := raw["imUsernameRule"].(string); ok { req.IMUsernameRule = v }
 	if v, ok := raw["imSyncInterval"].(float64); ok { req.IMSyncInterval = int(v) }
 	if v, ok := raw["imEnableSso"].(bool); ok { req.IMEnableSSO = v }
+	if v, ok := raw["imEnableQrLogin"].(bool); ok { req.IMEnableQRLogin = v }
 	if v, ok := raw["imSsoPriority"].(float64); ok { req.IMSSOPriority = int(v) }
 	if v, ok := raw["imSsoLabel"].(string); ok { req.IMSSOLabel = v }
 	// DB 字段
@@ -203,6 +204,7 @@ func UpdateUpstreamConnector(c *gin.Context) {
 		"imMatchField": "im_match_field", "imUsernameRule": "im_username_rule",
 		"imSyncInterval": "im_sync_interval", "imGeneratePassword": "im_generate_password",
 		"imEnableSso": "im_enable_sso", "imSsoEnable": "im_enable_sso",
+		"imEnableQrLogin": "im_enable_qr_login",
 		"imSsoPriority": "im_sso_priority", "imSsoLabel": "im_sso_label",
 		"bindPassword": "bind_password", "dbPassword": "db_password",
 		// OpenLDAP 属性映射
@@ -621,8 +623,7 @@ func UpdateUpstreamRule(c *gin.Context) {
 			if arr, ok := v.([]interface{}); ok {
 				b, _ := json.Marshal(arr)
 				updates["schedule_time"] = string(b)
-				updates["schedule_type"] = "times"
-				selectFields = append(selectFields, "schedule_time", "schedule_type")
+				selectFields = append(selectFields, "schedule_time")
 			}
 		} else if dbField, ok := fieldMap[k]; ok {
 			updates[dbField] = v
@@ -795,6 +796,12 @@ func executeIMUpstreamSync(conn models.Connector, rule models.SyncRule) syncer.U
 		result.UsersDisabled = disableRemovedIMUsers(conn, processedUIDs)
 	}
 
+	// 6. 检查本地群组是否在 IM 端已删除（自动删除/归档）
+	// 同样需要安全检查：只有成功获取到部门时才执行
+	if rule.AutoSyncGroups && len(depts) > 0 {
+		result.GroupsDeleted = removeDeletedIMGroups(conn, depts)
+	}
+
 	return result
 }
 
@@ -848,6 +855,10 @@ func syncDeptToLocalGroup(conn models.Connector, dept imclient.IMDeptInfo) {
 		found = storage.DB.Where("name = ? AND ding_talk_dept_id = 0", dept.Name).First(&group).Error == nil
 	}
 
+	// 记录旧值，用于检测变化并同步到下游
+	oldName := group.Name
+	oldParentID := group.ParentID
+
 	// 查找父群组：优先按父部门的 IM ID 查找
 	var parentID uint
 	if dept.ParentID != "" && dept.ParentID != "0" && dept.ParentID != "1" {
@@ -873,12 +884,22 @@ func syncDeptToLocalGroup(conn models.Connector, dept imclient.IMDeptInfo) {
 	}
 
 	if found {
+		// 更新已有群组
 		updates := map[string]interface{}{"name": dept.Name, "parent_id": parentID}
 		if remoteDeptID > 0 && group.DingTalkDeptID == 0 {
 			updates["ding_talk_dept_id"] = remoteDeptID
 		}
 		storage.DB.Model(&group).Updates(updates)
+
+		// 如果名称或父级变化，同步到下游
+		if oldName != dept.Name || oldParentID != parentID {
+			// 重新加载更新后的数据
+			storage.DB.First(&group, group.ID)
+			go syncer.SyncGroupToDownstream(group, "group_update", oldName, oldParentID)
+			log.Printf("[上游同步] 群组已更新并同步到下游: %s (id=%d)", group.Name, group.ID)
+		}
 	} else {
+		// 创建新群组
 		group = models.UserGroup{
 			Name:           dept.Name,
 			ParentID:       parentID,
@@ -886,6 +907,10 @@ func syncDeptToLocalGroup(conn models.Connector, dept imclient.IMDeptInfo) {
 			DingTalkDeptID: remoteDeptID,
 		}
 		storage.DB.Create(&group)
+
+		// 同步创建到下游
+		go syncer.SyncGroupToDownstream(group, "group_create", "", 0)
+		log.Printf("[上游同步] 群组已创建并同步到下游: %s (id=%d)", group.Name, group.ID)
 	}
 }
 
@@ -1129,6 +1154,98 @@ func disableRemovedIMUsers(conn models.Connector, activeUIDs map[string]bool) in
 		}
 	}
 	return disabled
+}
+
+// removeDeletedIMGroups 删除 IM 端已不存在的本地群组，并同步到下游
+func removeDeletedIMGroups(conn models.Connector, activeDepts []imclient.IMDeptInfo) int {
+	// 构建活跃部门 ID 集合
+	activeDeptIDs := make(map[int64]bool)
+	for _, d := range activeDepts {
+		remoteDeptID, _ := strconv.ParseInt(d.DeptID, 10, 64)
+		if remoteDeptID > 0 {
+			activeDeptIDs[remoteDeptID] = true
+		}
+	}
+
+	// 查找所有由该 IM 连接器同步创建的本地群组（DingTalkDeptID > 0）
+	var localGroups []models.UserGroup
+	storage.DB.Where("ding_talk_dept_id > 0").Find(&localGroups)
+
+	deleted := 0
+	// 按层级从深到浅排序删除（先删子级再删父级）
+	// 计算每个群组的层级深度
+	type groupWithLevel struct {
+		group models.UserGroup
+		level int
+	}
+	var groupsToDelete []groupWithLevel
+
+	for _, g := range localGroups {
+		if !activeDeptIDs[g.DingTalkDeptID] {
+			// 该群组在 IM 端已不存在
+			// 检查是否还有用户属于此群组
+			var userCount int64
+			storage.DB.Model(&models.User{}).Where("group_id = ? AND is_deleted = 0", g.ID).Count(&userCount)
+			if userCount > 0 {
+				// 有用户还在此群组，将用户移动到父级群组
+				storage.DB.Model(&models.User{}).Where("group_id = ?", g.ID).Update("group_id", g.ParentID)
+				log.Printf("[上游同步] 群组 %s 即将删除，已将 %d 个用户移动到父级群组", g.Name, userCount)
+
+				// 触发这些用户的下游同步（更新 OU 位置）
+				var usersToSync []models.User
+				storage.DB.Where("group_id = ?", g.ParentID).Find(&usersToSync)
+				for _, u := range usersToSync {
+					syncer.DispatchSyncEvent("user_update", u.ID, "")
+				}
+			}
+
+			// 计算层级深度
+			level := 0
+			parentID := g.ParentID
+			for parentID > 0 {
+				level++
+				var parent models.UserGroup
+				if storage.DB.First(&parent, parentID).Error != nil {
+					break
+				}
+				parentID = parent.ParentID
+			}
+			groupsToDelete = append(groupsToDelete, groupWithLevel{group: g, level: level})
+		}
+	}
+
+	// 按层级降序排序（深的先删）
+	for i := 0; i < len(groupsToDelete); i++ {
+		for j := i + 1; j < len(groupsToDelete); j++ {
+			if groupsToDelete[j].level > groupsToDelete[i].level {
+				groupsToDelete[i], groupsToDelete[j] = groupsToDelete[j], groupsToDelete[i]
+			}
+		}
+	}
+
+	// 执行删除
+	for _, gwl := range groupsToDelete {
+		g := gwl.group
+
+		// 检查是否还有子群组
+		var childCount int64
+		storage.DB.Model(&models.UserGroup{}).Where("parent_id = ?", g.ID).Count(&childCount)
+		if childCount > 0 {
+			// 将子群组移动到父级
+			storage.DB.Model(&models.UserGroup{}).Where("parent_id = ?", g.ID).Update("parent_id", g.ParentID)
+			log.Printf("[上游同步] 群组 %s 即将删除，已将 %d 个子群组移动到父级", g.Name, childCount)
+		}
+
+		// 同步删除到下游（先同步再删本地）
+		syncer.SyncGroupToDownstream(g, "group_delete", "", 0)
+
+		// 删除本地群组
+		storage.DB.Delete(&g)
+		log.Printf("[上游同步] 群组已删除: %s (DingTalkDeptID=%d)", g.Name, g.DingTalkDeptID)
+		deleted++
+	}
+
+	return deleted
 }
 
 func logUpstreamSync(ruleID, connID uint, triggerType, status, message string, affected int, duration int64) {

@@ -70,9 +70,10 @@ type Connector struct {
 	IMGeneratePassword bool   `gorm:"column:im_generate_password;default:true" json:"imGeneratePassword"` // 同步时生成随机密码
 
 	// === IM 免登配置 ===
-	IMEnableSSO   bool   `gorm:"column:im_enable_sso;default:false" json:"imEnableSso"`  // 是否启用免登
-	IMSSOPriority int    `gorm:"column:im_sso_priority;default:0" json:"imSsoPriority"`    // 免登按钮排序
-	IMSSOLabel    string `gorm:"column:im_sso_label;size:64" json:"imSsoLabel"`         // 自定义按钮文字
+	IMEnableSSO     bool   `gorm:"column:im_enable_sso;default:false" json:"imEnableSso"`        // 是否启用免登
+	IMEnableQRLogin bool   `gorm:"column:im_enable_qr_login;default:false" json:"imEnableQrLogin"` // 是否启用扫码登录（网页端二维码）
+	IMSSOPriority   int    `gorm:"column:im_sso_priority;default:0" json:"imSsoPriority"`        // 免登按钮排序
+	IMSSOLabel      string `gorm:"column:im_sso_label;size:64" json:"imSsoLabel"`               // 自定义按钮文字
 
 	// === RADIUS 字段 ===
 	RadiusServer  string `gorm:"size:255" json:"radiusServer"`           // RADIUS 服务器地址

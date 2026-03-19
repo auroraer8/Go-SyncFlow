@@ -24,6 +24,22 @@ import (
 	"go-syncflow/internal/storage"
 )
 
+// WebSocket 广播函数（由 handlers 包注入）
+var BroadcastSyncLogFunc func(log interface{})
+var BroadcastSyncEventFunc func(action, syncType, connectorName string, details interface{})
+
+func broadcastSyncLog(syncLog models.SyncLog) {
+	if BroadcastSyncLogFunc != nil {
+		BroadcastSyncLogFunc(syncLog)
+	}
+}
+
+func broadcastSyncEvent(action, syncType, connectorName string, details interface{}) {
+	if BroadcastSyncEventFunc != nil {
+		BroadcastSyncEventFunc(action, syncType, connectorName, details)
+	}
+}
+
 // ========== 连接器测试 ==========
 
 // TestADConnection 测试 AD LDAP 连接
@@ -508,40 +524,347 @@ func buildGroupOUPath(groupID uint, baseDN string) string {
 }
 
 // ensureOUExists 确保群组对应的 OU 在 AD 中存在（递归创建父级）
-func ensureOUExists(l *ldapv3.Conn, groupID uint, baseDN string) {
+// 返回值: OU 的 DN
+func ensureOUExists(l *ldapv3.Conn, groupID uint, baseDN string) string {
 	var group models.UserGroup
 	if storage.DB.First(&group, groupID).Error != nil {
-		return
+		return ""
 	}
-	// 先确保父 OU 存在
+
+	// 先确保父 OU 存在（递归）
+	var parentDN string
 	if group.ParentID > 0 {
-		ensureOUExists(l, group.ParentID, baseDN)
+		parentDN = ensureOUExists(l, group.ParentID, baseDN)
+		if parentDN == "" {
+			// 父级创建失败，无法继续
+			return ""
+		}
+	} else {
+		parentDN = baseDN
 	}
+
 	// 构建当前 OU 的 DN
-	ouDN := buildGroupOUPath(groupID, baseDN)
-	if ouDN == "" {
-		return
-	}
+	ouDN := fmt.Sprintf("ou=%s,%s", ldapv3.EscapeDN(group.Name), parentDN)
+
 	// 检查是否已存在
 	sr, err := l.Search(ldapv3.NewSearchRequest(
 		ouDN, ldapv3.ScopeBaseObject, ldapv3.NeverDerefAliases, 1, 5, false,
 		"(objectClass=*)", []string{"dn"}, nil,
 	))
 	if err == nil && len(sr.Entries) > 0 {
-		return // 已存在
+		return ouDN // 已存在
 	}
+
 	// 创建 OU
 	addReq := ldapv3.NewAddRequest(ouDN, nil)
 	addReq.Attribute("objectClass", []string{"top", "organizationalUnit"})
 	addReq.Attribute("ou", []string{group.Name})
 	addReq.Attribute("description", []string{fmt.Sprintf("部门: %s", group.Name)})
 	if err := l.Add(addReq); err != nil {
-		if !ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultEntryAlreadyExists) {
-			log.Printf("[同步] 自动创建OU失败 %s: %v", ouDN, err)
+		if ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultEntryAlreadyExists) {
+			return ouDN // 已存在（并发创建）
+		}
+		log.Printf("[同步] 自动创建OU失败 %s: %v", ouDN, err)
+		return ""
+	}
+	log.Printf("[同步] 自动创建OU成功: %s", ouDN)
+	return ouDN
+}
+
+// ========== 群组/OU 同步到下游 ==========
+
+// SyncGroupToDownstream 同步群组变更到所有下游连接器
+// event: group_create, group_update, group_delete
+func SyncGroupToDownstream(group models.UserGroup, event string, oldName string, oldParentID uint) {
+	// 获取所有启用的下游同步规则（direction='push'表示下游同步，status=1表示启用）
+	var syncRules []models.Synchronizer
+	storage.DB.Where("direction = 'push' AND status = ?", 1).Find(&syncRules)
+
+	for _, syncr := range syncRules {
+		// 检查同步器是否启用群组同步
+		if !syncr.SyncGroups {
+			continue
+		}
+
+		var conn models.Connector
+		if err := storage.DB.First(&conn, syncr.ConnectorID).Error; err != nil {
+			continue
+		}
+
+		switch conn.Type {
+		case "ldap_ad":
+			syncGroupToAD(conn, syncr, group, event, oldName, oldParentID)
+		case "ldap_generic":
+			syncGroupToGenericLDAP(conn, syncr, group, event, oldName, oldParentID)
+		case "mysql", "postgresql", "oracle", "sqlserver":
+			// 数据库类型的下游：同步到群组表
+			if conn.GroupTable != "" {
+				syncGroupToDB(conn, syncr, group, event)
+			}
+		}
+	}
+}
+
+// syncGroupToAD 同步群组变更到 AD
+func syncGroupToAD(conn models.Connector, syncr models.Synchronizer, group models.UserGroup, event string, oldName string, oldParentID uint) {
+	l, err := dialLDAP(conn)
+	if err != nil {
+		log.Printf("[同步] AD连接失败: %v", err)
+		return
+	}
+	defer l.Close()
+
+	if err := l.Bind(conn.BindDN, conn.BindPassword); err != nil {
+		log.Printf("[同步] AD认证失败: %v", err)
+		return
+	}
+
+	targetContainer := syncr.TargetContainer
+	if targetContainer == "" {
+		targetContainer = conn.BaseDN
+	}
+
+	switch event {
+	case "group_create":
+		// 创建 OU（确保父级存在）
+		ouDN := ensureOUExists(l, group.ID, targetContainer)
+		if ouDN != "" {
+			log.Printf("[同步] 群组创建成功，OU: %s", ouDN)
+		}
+
+	case "group_update":
+		// 群组更新（重命名或移动父级）
+		// 1. 计算旧的 OU DN
+		oldOUDN := buildGroupOUPathWithOverride(group.ID, targetContainer, oldName, oldParentID)
+		if oldOUDN == "" {
+			log.Printf("[同步] 无法计算旧的OU路径")
+			return
+		}
+
+		// 2. 计算新的 OU DN
+		newOUDN := buildGroupOUPath(group.ID, targetContainer)
+		if newOUDN == "" {
+			log.Printf("[同步] 无法计算新的OU路径")
+			return
+		}
+
+		if strings.EqualFold(oldOUDN, newOUDN) {
+			log.Printf("[同步] OU路径未变化，无需更新")
+			return
+		}
+
+		// 3. 检查旧 OU 是否存在
+		sr, _ := l.Search(ldapv3.NewSearchRequest(
+			oldOUDN, ldapv3.ScopeBaseObject, ldapv3.NeverDerefAliases, 1, 5, false,
+			"(objectClass=*)", []string{"dn"}, nil,
+		))
+		if sr == nil || len(sr.Entries) == 0 {
+			// 旧 OU 不存在，直接创建新的
+			ensureOUExists(l, group.ID, targetContainer)
+			log.Printf("[同步] 旧OU不存在，已创建新OU: %s", newOUDN)
+			return
+		}
+
+		// 4. 计算新的父 DN 和新的 RDN
+		newParentDN := targetContainer
+		if group.ParentID > 0 {
+			newParentDN = buildGroupOUPath(group.ParentID, targetContainer)
+			if newParentDN == "" {
+				newParentDN = targetContainer
+			}
+			// 确保新父 OU 存在
+			ensureOUExists(l, group.ParentID, targetContainer)
+		}
+		newRDN := fmt.Sprintf("ou=%s", ldapv3.EscapeDN(group.Name))
+
+		// 5. 执行 ModifyDN（重命名/移动）
+		modDNReq := ldapv3.NewModifyDNRequest(oldOUDN, newRDN, true, newParentDN)
+		if err := l.ModifyDN(modDNReq); err != nil {
+			log.Printf("[同步] OU更新失败 %s -> %s: %v", oldOUDN, newOUDN, err)
+		} else {
+			log.Printf("[同步] OU更新成功: %s -> %s", oldOUDN, newOUDN)
+		}
+
+	case "group_delete":
+		// 删除 OU
+		ouDN := buildGroupOUPath(group.ID, targetContainer)
+		if ouDN == "" {
+			return
+		}
+
+		// 检查 OU 是否存在
+		sr, _ := l.Search(ldapv3.NewSearchRequest(
+			ouDN, ldapv3.ScopeBaseObject, ldapv3.NeverDerefAliases, 1, 5, false,
+			"(objectClass=*)", []string{"dn"}, nil,
+		))
+		if sr == nil || len(sr.Entries) == 0 {
+			log.Printf("[同步] OU不存在，无需删除: %s", ouDN)
+			return
+		}
+
+		// 计算父级 OU（用于移动子对象）
+		parentOUDN := targetContainer
+		if group.ParentID > 0 {
+			parentOUDN = buildGroupOUPath(group.ParentID, targetContainer)
+			if parentOUDN == "" {
+				parentOUDN = targetContainer
+			}
+		}
+
+		// 搜索 OU 下的所有子对象（用户、子OU等）
+		subSR, _ := l.Search(ldapv3.NewSearchRequest(
+			ouDN, ldapv3.ScopeSingleLevel, ldapv3.NeverDerefAliases, 0, 0, false,
+			"(objectClass=*)", []string{"dn", "objectClass"}, nil,
+		))
+
+		if subSR != nil && len(subSR.Entries) > 0 {
+			log.Printf("[同步] OU下有 %d 个子对象，尝试移动到父级: %s", len(subSR.Entries), parentOUDN)
+
+			for _, entry := range subSR.Entries {
+				childDN := entry.DN
+				// 提取 RDN（cn=xxx 或 ou=xxx）
+				parts := strings.SplitN(childDN, ",", 2)
+				if len(parts) < 1 {
+					continue
+				}
+				rdn := parts[0]
+
+				// 移动到父级 OU
+				modDNReq := ldapv3.NewModifyDNRequest(childDN, rdn, true, parentOUDN)
+				if err := l.ModifyDN(modDNReq); err != nil {
+					log.Printf("[同步] 移动子对象失败 %s -> %s: %v", childDN, parentOUDN, err)
+					// 如果移动失败（如有嵌套子对象），跳过删除此 OU
+					log.Printf("[同步] OU下有无法移动的对象，跳过删除: %s", ouDN)
+					return
+				}
+				log.Printf("[同步] 已移动子对象: %s -> %s", childDN, parentOUDN)
+			}
+		}
+
+		// 删除 OU
+		delReq := ldapv3.NewDelRequest(ouDN, nil)
+		if err := l.Del(delReq); err != nil {
+			if !ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultNoSuchObject) {
+				log.Printf("[同步] OU删除失败 %s: %v", ouDN, err)
+			}
+		} else {
+			log.Printf("[同步] OU删除成功: %s", ouDN)
+		}
+	}
+}
+
+// syncGroupToGenericLDAP 同步群组变更到通用 LDAP
+func syncGroupToGenericLDAP(conn models.Connector, syncr models.Synchronizer, group models.UserGroup, event string, oldName string, oldParentID uint) {
+	// 通用 LDAP 的处理逻辑与 AD 类似，但 objectClass 不同
+	l, err := dialLDAP(conn)
+	if err != nil {
+		log.Printf("[同步] LDAP连接失败: %v", err)
+		return
+	}
+	defer l.Close()
+
+	if err := l.Bind(conn.BindDN, conn.BindPassword); err != nil {
+		log.Printf("[同步] LDAP认证失败: %v", err)
+		return
+	}
+
+	targetContainer := syncr.TargetContainer
+	if targetContainer == "" {
+		targetContainer = conn.BaseDN
+	}
+
+	switch event {
+	case "group_create":
+		ouDN := buildGroupOUPath(group.ID, targetContainer)
+		if ouDN == "" {
+			return
+		}
+		// 先确保父级存在
+		if group.ParentID > 0 {
+			ensureOUExistsGenericLDAP(l, group.ParentID, targetContainer)
+		}
+		// 创建 OU
+		addReq := ldapv3.NewAddRequest(ouDN, nil)
+		addReq.Attribute("objectClass", []string{"top", "organizationalUnit"})
+		addReq.Attribute("ou", []string{group.Name})
+		if err := l.Add(addReq); err != nil {
+			if !ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultEntryAlreadyExists) {
+				log.Printf("[同步] LDAP OU创建失败 %s: %v", ouDN, err)
+			}
+		} else {
+			log.Printf("[同步] LDAP OU创建成功: %s", ouDN)
+		}
+
+	case "group_update", "group_delete":
+		// 与 AD 逻辑类似
+		syncGroupToAD(conn, syncr, group, event, oldName, oldParentID)
+	}
+}
+
+// ensureOUExistsGenericLDAP 确保通用 LDAP 的 OU 存在
+func ensureOUExistsGenericLDAP(l *ldapv3.Conn, groupID uint, baseDN string) string {
+	var group models.UserGroup
+	if storage.DB.First(&group, groupID).Error != nil {
+		return ""
+	}
+
+	var parentDN string
+	if group.ParentID > 0 {
+		parentDN = ensureOUExistsGenericLDAP(l, group.ParentID, baseDN)
+		if parentDN == "" {
+			return ""
 		}
 	} else {
-		log.Printf("[同步] 自动创建OU成功: %s", ouDN)
+		parentDN = baseDN
 	}
+
+	ouDN := fmt.Sprintf("ou=%s,%s", ldapv3.EscapeDN(group.Name), parentDN)
+
+	sr, err := l.Search(ldapv3.NewSearchRequest(
+		ouDN, ldapv3.ScopeBaseObject, ldapv3.NeverDerefAliases, 1, 5, false,
+		"(objectClass=*)", []string{"dn"}, nil,
+	))
+	if err == nil && len(sr.Entries) > 0 {
+		return ouDN
+	}
+
+	addReq := ldapv3.NewAddRequest(ouDN, nil)
+	addReq.Attribute("objectClass", []string{"top", "organizationalUnit"})
+	addReq.Attribute("ou", []string{group.Name})
+	if err := l.Add(addReq); err != nil {
+		if ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultEntryAlreadyExists) {
+			return ouDN
+		}
+		log.Printf("[同步] LDAP OU创建失败 %s: %v", ouDN, err)
+		return ""
+	}
+	return ouDN
+}
+
+// buildGroupOUPathWithOverride 使用覆盖的名称和父ID构建 OU 路径（用于计算旧路径）
+func buildGroupOUPathWithOverride(groupID uint, baseDN string, overrideName string, overrideParentID uint) string {
+	var group models.UserGroup
+	if storage.DB.First(&group, groupID).Error != nil {
+		return ""
+	}
+
+	name := group.Name
+	parentID := group.ParentID
+	if overrideName != "" {
+		name = overrideName
+	}
+	if overrideParentID > 0 || overrideParentID == 0 {
+		// 使用覆盖的父ID（包括0表示根级）
+		parentID = overrideParentID
+	}
+
+	if parentID > 0 {
+		parentDN := buildGroupOUPath(parentID, baseDN)
+		if parentDN != "" {
+			return fmt.Sprintf("ou=%s,%s", ldapv3.EscapeDN(name), parentDN)
+		}
+	}
+	return fmt.Sprintf("ou=%s,%s", ldapv3.EscapeDN(name), baseDN)
 }
 
 // adSyncUserStatus 显式同步用户启用/禁用状态到 AD
@@ -852,51 +1175,77 @@ func batchSyncUsersToAD(conn models.Connector, syncr models.Synchronizer, users 
 	}
 	rootGroups = childrenMap[0] // parent_id=0 的是根节点
 
-	// 计算每个群组对应的 OU DN
-	groupDNMap := make(map[uint]string) // groupID -> OU DN
-	var buildOUTree func(groups []models.UserGroup, parentDN string)
-	buildOUTree = func(groups []models.UserGroup, parentDN string) {
+	// 计算每个群组对应的 OU DN（递归构建完整路径）
+	groupDNMap := make(map[uint]string)   // groupID -> OU DN
+	groupLevelMap := make(map[uint]int)   // groupID -> level (用于按层级排序)
+	var buildOUTree func(groups []models.UserGroup, parentDN string, level int)
+	buildOUTree = func(groups []models.UserGroup, parentDN string, level int) {
 		for _, g := range groups {
 			ouDN := fmt.Sprintf("ou=%s,%s", ldapv3.EscapeDN(g.Name), parentDN)
 			groupDNMap[g.ID] = ouDN
-			buildOUTree(childrenMap[g.ID], ouDN)
+			groupLevelMap[g.ID] = level
+			buildOUTree(childrenMap[g.ID], ouDN, level+1)
 		}
 	}
-	buildOUTree(rootGroups, targetContainer)
+	buildOUTree(rootGroups, targetContainer, 1)
 
-	// 按层级顺序创建 OU（先父后子）
-	var createOUs func(groups []models.UserGroup, parentDN string)
+	// 按层级顺序创建 OU（严格先父后子）
+	// 收集所有群组并按层级排序
+	type groupWithLevel struct {
+		group models.UserGroup
+		level int
+		ouDN  string
+	}
+	var sortedGroups []groupWithLevel
+	for _, g := range allGroups {
+		if dn, ok := groupDNMap[g.ID]; ok {
+			sortedGroups = append(sortedGroups, groupWithLevel{
+				group: g,
+				level: groupLevelMap[g.ID],
+				ouDN:  dn,
+			})
+		}
+	}
+	// 按层级排序（level 小的先创建）
+	for i := 0; i < len(sortedGroups); i++ {
+		for j := i + 1; j < len(sortedGroups); j++ {
+			if sortedGroups[j].level < sortedGroups[i].level {
+				sortedGroups[i], sortedGroups[j] = sortedGroups[j], sortedGroups[i]
+			}
+		}
+	}
+
 	ouCreated := 0
 	ouSkipped := 0
-	createOUs = func(groups []models.UserGroup, parentDN string) {
-		for _, g := range groups {
-			ouDN := groupDNMap[g.ID]
-			// 检查 OU 是否已存在
-			sr, err := l.Search(ldapv3.NewSearchRequest(
-				ouDN, ldapv3.ScopeBaseObject, ldapv3.NeverDerefAliases, 1, 5, false,
-				"(objectClass=*)", []string{"dn"}, nil,
-			))
-			if err == nil && len(sr.Entries) > 0 {
+	ouFailed := 0
+	for _, sg := range sortedGroups {
+		// 检查 OU 是否已存在
+		sr, err := l.Search(ldapv3.NewSearchRequest(
+			sg.ouDN, ldapv3.ScopeBaseObject, ldapv3.NeverDerefAliases, 1, 5, false,
+			"(objectClass=*)", []string{"dn"}, nil,
+		))
+		if err == nil && len(sr.Entries) > 0 {
+			ouSkipped++
+			continue
+		}
+		// 创建 OU
+		addReq := ldapv3.NewAddRequest(sg.ouDN, nil)
+		addReq.Attribute("objectClass", []string{"top", "organizationalUnit"})
+		addReq.Attribute("ou", []string{sg.group.Name})
+		addReq.Attribute("description", []string{fmt.Sprintf("部门: %s", sg.group.Name)})
+		if err := l.Add(addReq); err != nil {
+			if ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultEntryAlreadyExists) {
 				ouSkipped++
 			} else {
-				// 创建 OU
-				addReq := ldapv3.NewAddRequest(ouDN, nil)
-				addReq.Attribute("objectClass", []string{"top", "organizationalUnit"})
-				addReq.Attribute("ou", []string{g.Name})
-				addReq.Attribute("description", []string{fmt.Sprintf("部门: %s", g.Name)})
-				if err := l.Add(addReq); err != nil {
-					if !ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultEntryAlreadyExists) {
-						result.Errors = append(result.Errors, fmt.Sprintf("[OU:%s] 创建OU失败: %v", g.Name, err))
-					}
-				} else {
-					ouCreated++
-				}
+				ouFailed++
+				result.Errors = append(result.Errors, fmt.Sprintf("[OU:%s] 创建OU失败(level=%d): %v", sg.group.Name, sg.level, err))
 			}
-			createOUs(childrenMap[g.ID], ouDN)
+		} else {
+			ouCreated++
+			log.Printf("[同步] OU创建成功(level=%d): %s", sg.level, sg.ouDN)
 		}
 	}
-	createOUs(rootGroups, targetContainer)
-	log.Printf("[同步] OU创建完成: 新建%d, 已存在%d", ouCreated, ouSkipped)
+	log.Printf("[同步] OU同步完成: 新建%d, 已存在%d, 失败%d", ouCreated, ouSkipped, ouFailed)
 
 	// ===== 第二步：同步角色为 AD 安全组 =====
 	var roles []models.Role
@@ -936,12 +1285,26 @@ func batchSyncUsersToAD(conn models.Connector, syncr models.Synchronizer, users 
 		userRoleMap[ur.UserID] = append(userRoleMap[ur.UserID], ur.RoleID)
 	}
 
+	// 记录创建失败的 OU，避免重复错误
+	failedOUs := make(map[uint]bool)
+
 	// ===== 第三步：同步用户到对应的 OU =====
 	for _, user := range users {
 		// 确定用户应该在哪个 OU
 		userParentDN := targetContainer // 默认
 		if user.GroupID > 0 {
-			if dn, ok := groupDNMap[uint(user.GroupID)]; ok {
+			// 先检查该 OU 是否之前创建失败
+			if failedOUs[uint(user.GroupID)] {
+				// OU 创建失败，尝试再次创建
+				ouDN := ensureOUExists(l, uint(user.GroupID), targetContainer)
+				if ouDN != "" {
+					userParentDN = ouDN
+					delete(failedOUs, uint(user.GroupID))
+				} else {
+					// 仍然失败，用户放到默认容器
+					result.Errors = append(result.Errors, fmt.Sprintf("[%s] 所属分组OU创建失败，将用户放入默认容器", user.Username))
+				}
+			} else if dn, ok := groupDNMap[uint(user.GroupID)]; ok {
 				userParentDN = dn
 			}
 		}
@@ -1047,6 +1410,31 @@ func batchSyncUsersToAD(conn models.Connector, syncr models.Synchronizer, users 
 			}
 
 			if err := l.Add(addReq); err != nil {
+				// 检查是否是 OU 不存在导致的错误 (LDAP Result Code 32 "No Such Object")
+				if ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultNoSuchObject) && user.GroupID > 0 {
+					// 尝试创建 OU 层级
+					log.Printf("[同步] [%s] 父级OU不存在，尝试创建...", user.Username)
+					ouDN := ensureOUExists(l, uint(user.GroupID), targetContainer)
+					if ouDN != "" {
+						// OU 创建成功，更新 userDN 并重试
+						userDN = fmt.Sprintf("cn=%s,%s", ldapv3.EscapeDN(user.Username), ouDN)
+						addReq2 := ldapv3.NewAddRequest(userDN, nil)
+						for _, attr := range addReq.Attributes {
+							addReq2.Attribute(attr.Type, attr.Vals)
+						}
+						if err2 := l.Add(addReq2); err2 != nil {
+							result.Failed++
+							result.Errors = append(result.Errors, fmt.Sprintf("[%s] 重试创建失败: %v", user.Username, err2))
+							failedOUs[uint(user.GroupID)] = true
+							continue
+						}
+						result.Success++
+						result.Created = append(result.Created, user.Username)
+						continue
+					} else {
+						failedOUs[uint(user.GroupID)] = true
+					}
+				}
 				result.Failed++
 				result.Errors = append(result.Errors, fmt.Sprintf("[%s] 创建失败: %v", user.Username, err))
 				continue
@@ -1214,12 +1602,10 @@ func syncUserToAD(conn models.Connector, syncr models.Synchronizer, user models.
 	// 如果用户有群组，构建对应的 OU DN 层级并确保 OU 存在
 	userParentDN := targetContainer
 	if user.GroupID > 0 {
-		// 构建群组层级路径
-		ouPath := buildGroupOUPath(user.GroupID, targetContainer)
-		if ouPath != "" {
-			userParentDN = ouPath
-			// 确保 OU 层级存在（递归创建）
-			ensureOUExists(l, user.GroupID, targetContainer)
+		// 确保 OU 层级存在（递归创建），返回创建后的 OU DN
+		ouDN := ensureOUExists(l, user.GroupID, targetContainer)
+		if ouDN != "" {
+			userParentDN = ouDN
 		}
 	}
 	userDN := fmt.Sprintf("cn=%s,%s", ldapv3.EscapeDN(user.Username), userParentDN)
@@ -1773,6 +2159,522 @@ func syncUserToMySQL(conn models.Connector, syncr models.Synchronizer, user mode
 	return syncUserToDB(conn, syncr, user, event, rawPassword)
 }
 
+// ========== 数据库群组同步 ==========
+
+// syncGroupToDB 同步群组变更到数据库
+func syncGroupToDB(conn models.Connector, syncr models.Synchronizer, group models.UserGroup, event string) {
+	if conn.GroupTable == "" {
+		return
+	}
+
+	dbType := conn.EffectiveDBType()
+	db, err := dialDB(conn)
+	if err != nil {
+		log.Printf("[同步] 数据库连接失败: %v", err)
+		return
+	}
+	defer db.Close()
+
+	// 获取群组属性映射
+	var mappings []models.SyncAttributeMapping
+	storage.DB.Where("(synchronizer_id = ? OR sync_rule_id = ?) AND object_type = ? AND is_enabled = ?", syncr.ID, syncr.ID, "group", true).Order("priority").Find(&mappings)
+
+	ph := func(idx int) string {
+		switch dbType {
+		case "postgresql":
+			return fmt.Sprintf("$%d", idx)
+		case "oracle":
+			return fmt.Sprintf(":%d", idx)
+		default:
+			return "?"
+		}
+	}
+
+	switch event {
+	case "group_delete":
+		// 删除群组记录
+		idCol := "id"
+		for _, m := range mappings {
+			if m.SourceAttribute == "id" {
+				idCol = m.TargetAttribute
+				break
+			}
+		}
+		q := fmt.Sprintf("DELETE FROM %s WHERE %s = %s",
+			quoteIdentifier(dbType, conn.GroupTable),
+			quoteIdentifier(dbType, idCol),
+			ph(1))
+		if _, err := db.Exec(q, group.ID); err != nil {
+			log.Printf("[同步] 删除群组失败: %v", err)
+		} else {
+			log.Printf("[同步] 群组已从数据库删除: %s (ID=%d)", group.Name, group.ID)
+		}
+
+	case "group_create", "group_update":
+		// 构造字段值映射
+		cols := make(map[string]interface{})
+		for _, m := range mappings {
+			val := resolveGroupSourceValue(m, group)
+			if val != nil {
+				cols[m.TargetAttribute] = val
+			}
+		}
+
+		// 默认映射
+		if len(cols) == 0 {
+			cols["id"] = group.ID
+			cols["name"] = group.Name
+			cols["parent_id"] = group.ParentID
+		}
+
+		idCol := "id"
+		for _, m := range mappings {
+			if m.SourceAttribute == "id" {
+				idCol = m.TargetAttribute
+				break
+			}
+		}
+
+		// 检查是否存在
+		var count int
+		countQ := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = %s",
+			quoteIdentifier(dbType, conn.GroupTable),
+			quoteIdentifier(dbType, idCol),
+			ph(1))
+		if err := db.QueryRow(countQ, group.ID).Scan(&count); err != nil {
+			log.Printf("[同步] 查询群组失败: %v", err)
+			return
+		}
+
+		if count > 0 {
+			// 更新
+			setClauses := make([]string, 0)
+			vals := make([]interface{}, 0)
+			paramIdx := 1
+			for col, val := range cols {
+				if col == idCol {
+					continue
+				}
+				setClauses = append(setClauses, fmt.Sprintf("%s = %s", quoteIdentifier(dbType, col), ph(paramIdx)))
+				vals = append(vals, val)
+				paramIdx++
+			}
+			vals = append(vals, group.ID)
+
+			if len(setClauses) > 0 {
+				query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = %s",
+					quoteIdentifier(dbType, conn.GroupTable),
+					strings.Join(setClauses, ", "),
+					quoteIdentifier(dbType, idCol),
+					ph(paramIdx))
+				if _, err := db.Exec(query, vals...); err != nil {
+					log.Printf("[同步] 更新群组失败: %v", err)
+				} else {
+					log.Printf("[同步] 群组已更新: %s (ID=%d)", group.Name, group.ID)
+				}
+			}
+		} else if event == "group_create" {
+			// 插入
+			colNames := make([]string, 0)
+			placeholders := make([]string, 0)
+			vals := make([]interface{}, 0)
+			paramIdx := 1
+			for col, val := range cols {
+				colNames = append(colNames, quoteIdentifier(dbType, col))
+				placeholders = append(placeholders, ph(paramIdx))
+				vals = append(vals, val)
+				paramIdx++
+			}
+			query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+				quoteIdentifier(dbType, conn.GroupTable),
+				strings.Join(colNames, ", "),
+				strings.Join(placeholders, ", "))
+			if _, err := db.Exec(query, vals...); err != nil {
+				log.Printf("[同步] 插入群组失败: %v", err)
+			} else {
+				log.Printf("[同步] 群组已创建: %s (ID=%d)", group.Name, group.ID)
+			}
+		}
+	}
+}
+
+// resolveGroupSourceValue 解析群组属性值
+func resolveGroupSourceValue(m models.SyncAttributeMapping, group models.UserGroup) interface{} {
+	var val interface{}
+	switch m.SourceAttribute {
+	case "id":
+		val = group.ID
+	case "name":
+		val = group.Name
+	case "parent_id", "parentId":
+		val = group.ParentID
+	case "order":
+		val = group.Order
+	case "dingtalk_dept_id", "dingTalkDeptId":
+		val = group.DingTalkDeptID
+	}
+	return val
+}
+
+// ========== 数据库角色同步 ==========
+
+// SyncRoleToDownstream 同步角色变更到所有下游连接器
+func SyncRoleToDownstream(role models.Role, event string) {
+	var syncRules []models.Synchronizer
+	storage.DB.Where("direction = 'push' AND status = ? AND sync_roles = ?", 1, true).Find(&syncRules)
+
+	for _, syncr := range syncRules {
+		var conn models.Connector
+		if err := storage.DB.First(&conn, syncr.ConnectorID).Error; err != nil {
+			continue
+		}
+
+		switch conn.Type {
+		case "ldap_ad":
+			// AD 角色映射为安全组
+			syncRoleToAD(conn, syncr, role, event)
+		case "ldap_generic":
+			// 通用 LDAP 角色映射为 groupOfNames
+			syncRoleToGenericLDAP(conn, syncr, role, event)
+		case "mysql", "postgresql", "oracle", "sqlserver":
+			if conn.RoleTable != "" {
+				syncRoleToDB(conn, syncr, role, event)
+			}
+		}
+	}
+}
+
+// syncRoleToAD 同步角色变更到 AD（作为安全组）
+func syncRoleToAD(conn models.Connector, syncr models.Synchronizer, role models.Role, event string) {
+	l, err := dialLDAP(conn)
+	if err != nil {
+		log.Printf("[同步] AD连接失败: %v", err)
+		return
+	}
+	defer l.Close()
+
+	if err := l.Bind(conn.BindDN, conn.BindPassword); err != nil {
+		log.Printf("[同步] AD认证失败: %v", err)
+		return
+	}
+
+	roleGroupBaseDN := syncr.RoleGroupContainer
+	if roleGroupBaseDN == "" {
+		roleGroupBaseDN = conn.BaseDN
+	}
+
+	groupDN := fmt.Sprintf("cn=%s,%s", ldapv3.EscapeDN(role.Name), roleGroupBaseDN)
+
+	switch event {
+	case "role_create":
+		// 确保角色组 OU 存在
+		ensureRoleGroupOU(l, syncr.RoleGroupContainer, conn.BaseDN)
+
+		// 创建安全组
+		addReq := ldapv3.NewAddRequest(groupDN, nil)
+		addReq.Attribute("objectClass", []string{"top", "group"})
+		addReq.Attribute("cn", []string{role.Name})
+		addReq.Attribute("sAMAccountName", []string{role.Code})
+		addReq.Attribute("groupType", []string{"-2147483646"}) // Universal Security Group
+		if role.Description != "" {
+			addReq.Attribute("description", []string{role.Description})
+		}
+		if err := l.Add(addReq); err != nil {
+			if !ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultEntryAlreadyExists) {
+				log.Printf("[同步] 创建AD安全组失败 %s: %v", groupDN, err)
+			}
+		} else {
+			log.Printf("[同步] AD安全组已创建: %s", groupDN)
+		}
+
+	case "role_update":
+		// 更新安全组属性
+		realDN := searchGroupDN(l, conn.BaseDN, role.Name)
+		if realDN == "" {
+			// 不存在则创建
+			SyncRoleToDownstream(role, "role_create")
+			return
+		}
+		modReq := ldapv3.NewModifyRequest(realDN, nil)
+		if role.Description != "" {
+			modReq.Replace("description", []string{role.Description})
+		}
+		if len(modReq.Changes) > 0 {
+			if err := l.Modify(modReq); err != nil {
+				log.Printf("[同步] 更新AD安全组失败 %s: %v", realDN, err)
+			} else {
+				log.Printf("[同步] AD安全组已更新: %s", realDN)
+			}
+		}
+
+	case "role_delete":
+		realDN := searchGroupDN(l, conn.BaseDN, role.Name)
+		if realDN != "" {
+			delReq := ldapv3.NewDelRequest(realDN, nil)
+			if err := l.Del(delReq); err != nil {
+				if !ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultNoSuchObject) {
+					log.Printf("[同步] 删除AD安全组失败 %s: %v", realDN, err)
+				}
+			} else {
+				log.Printf("[同步] AD安全组已删除: %s", realDN)
+			}
+		}
+	}
+}
+
+// syncRoleToGenericLDAP 同步角色变更到通用 LDAP（作为 groupOfNames）
+func syncRoleToGenericLDAP(conn models.Connector, syncr models.Synchronizer, role models.Role, event string) {
+	l, err := dialLDAP(conn)
+	if err != nil {
+		log.Printf("[同步] LDAP连接失败: %v", err)
+		return
+	}
+	defer l.Close()
+
+	if err := l.Bind(conn.BindDN, conn.BindPassword); err != nil {
+		log.Printf("[同步] LDAP认证失败: %v", err)
+		return
+	}
+
+	roleGroupBaseDN := syncr.RoleGroupContainer
+	if roleGroupBaseDN == "" {
+		roleGroupBaseDN = conn.BaseDN
+	}
+
+	groupDN := fmt.Sprintf("cn=%s,%s", ldapv3.EscapeDN(role.Name), roleGroupBaseDN)
+
+	switch event {
+	case "role_create":
+		// 创建 groupOfNames（OpenLDAP 标准）
+		addReq := ldapv3.NewAddRequest(groupDN, nil)
+		addReq.Attribute("objectClass", []string{"top", "groupOfNames"})
+		addReq.Attribute("cn", []string{role.Name})
+		// groupOfNames 必须有至少一个 member，使用占位符
+		addReq.Attribute("member", []string{conn.BindDN})
+		if role.Description != "" {
+			addReq.Attribute("description", []string{role.Description})
+		}
+		if err := l.Add(addReq); err != nil {
+			if !ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultEntryAlreadyExists) {
+				log.Printf("[同步] 创建LDAP组失败 %s: %v", groupDN, err)
+			}
+		} else {
+			log.Printf("[同步] LDAP组已创建: %s", groupDN)
+		}
+
+	case "role_update":
+		// 更新组属性
+		realDN := searchGroupDNGeneric(l, conn.BaseDN, role.Name)
+		if realDN == "" {
+			syncRoleToGenericLDAP(conn, syncr, role, "role_create")
+			return
+		}
+		modReq := ldapv3.NewModifyRequest(realDN, nil)
+		if role.Description != "" {
+			modReq.Replace("description", []string{role.Description})
+		}
+		if len(modReq.Changes) > 0 {
+			if err := l.Modify(modReq); err != nil {
+				log.Printf("[同步] 更新LDAP组失败 %s: %v", realDN, err)
+			} else {
+				log.Printf("[同步] LDAP组已更新: %s", realDN)
+			}
+		}
+
+	case "role_delete":
+		realDN := searchGroupDNGeneric(l, conn.BaseDN, role.Name)
+		if realDN != "" {
+			delReq := ldapv3.NewDelRequest(realDN, nil)
+			if err := l.Del(delReq); err != nil {
+				if !ldapv3.IsErrorWithCode(err, ldapv3.LDAPResultNoSuchObject) {
+					log.Printf("[同步] 删除LDAP组失败 %s: %v", realDN, err)
+				}
+			} else {
+				log.Printf("[同步] LDAP组已删除: %s", realDN)
+			}
+		}
+	}
+}
+
+// searchGroupDNGeneric 搜索通用LDAP中的组DN
+func searchGroupDNGeneric(l *ldapv3.Conn, baseDN string, groupName string) string {
+	sr, err := l.Search(ldapv3.NewSearchRequest(
+		baseDN, ldapv3.ScopeWholeSubtree, ldapv3.NeverDerefAliases, 1, 10, false,
+		fmt.Sprintf("(&(objectClass=groupOfNames)(cn=%s))", ldapv3.EscapeFilter(groupName)),
+		[]string{"dn"}, nil,
+	))
+	if err != nil || len(sr.Entries) == 0 {
+		return ""
+	}
+	return sr.Entries[0].DN
+}
+
+// searchGroupDN 搜索AD中的组DN
+func searchGroupDN(l *ldapv3.Conn, baseDN string, groupName string) string {
+	sr, err := l.Search(ldapv3.NewSearchRequest(
+		baseDN, ldapv3.ScopeWholeSubtree, ldapv3.NeverDerefAliases, 1, 10, false,
+		fmt.Sprintf("(&(objectClass=group)(cn=%s))", ldapv3.EscapeFilter(groupName)),
+		[]string{"dn"}, nil,
+	))
+	if err != nil || len(sr.Entries) == 0 {
+		return ""
+	}
+	return sr.Entries[0].DN
+}
+
+// syncRoleToDB 同步角色变更到数据库
+func syncRoleToDB(conn models.Connector, syncr models.Synchronizer, role models.Role, event string) {
+	if conn.RoleTable == "" {
+		return
+	}
+
+	dbType := conn.EffectiveDBType()
+	db, err := dialDB(conn)
+	if err != nil {
+		log.Printf("[同步] 数据库连接失败: %v", err)
+		return
+	}
+	defer db.Close()
+
+	// 获取角色属性映射
+	var mappings []models.SyncAttributeMapping
+	storage.DB.Where("(synchronizer_id = ? OR sync_rule_id = ?) AND object_type = ? AND is_enabled = ?", syncr.ID, syncr.ID, "role", true).Order("priority").Find(&mappings)
+
+	ph := func(idx int) string {
+		switch dbType {
+		case "postgresql":
+			return fmt.Sprintf("$%d", idx)
+		case "oracle":
+			return fmt.Sprintf(":%d", idx)
+		default:
+			return "?"
+		}
+	}
+
+	switch event {
+	case "role_delete":
+		idCol := "id"
+		for _, m := range mappings {
+			if m.SourceAttribute == "id" {
+				idCol = m.TargetAttribute
+				break
+			}
+		}
+		q := fmt.Sprintf("DELETE FROM %s WHERE %s = %s",
+			quoteIdentifier(dbType, conn.RoleTable),
+			quoteIdentifier(dbType, idCol),
+			ph(1))
+		if _, err := db.Exec(q, role.ID); err != nil {
+			log.Printf("[同步] 删除角色失败: %v", err)
+		} else {
+			log.Printf("[同步] 角色已从数据库删除: %s (ID=%d)", role.Name, role.ID)
+		}
+
+	case "role_create", "role_update":
+		cols := make(map[string]interface{})
+		for _, m := range mappings {
+			val := resolveRoleSourceValue(m, role)
+			if val != nil {
+				cols[m.TargetAttribute] = val
+			}
+		}
+
+		// 默认映射
+		if len(cols) == 0 {
+			cols["id"] = role.ID
+			cols["name"] = role.Name
+			cols["code"] = role.Code
+			cols["description"] = role.Description
+			cols["status"] = role.Status
+		}
+
+		idCol := "id"
+		for _, m := range mappings {
+			if m.SourceAttribute == "id" {
+				idCol = m.TargetAttribute
+				break
+			}
+		}
+
+		var count int
+		countQ := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = %s",
+			quoteIdentifier(dbType, conn.RoleTable),
+			quoteIdentifier(dbType, idCol),
+			ph(1))
+		if err := db.QueryRow(countQ, role.ID).Scan(&count); err != nil {
+			log.Printf("[同步] 查询角色失败: %v", err)
+			return
+		}
+
+		if count > 0 {
+			// 更新
+			setClauses := make([]string, 0)
+			vals := make([]interface{}, 0)
+			paramIdx := 1
+			for col, val := range cols {
+				if col == idCol {
+					continue
+				}
+				setClauses = append(setClauses, fmt.Sprintf("%s = %s", quoteIdentifier(dbType, col), ph(paramIdx)))
+				vals = append(vals, val)
+				paramIdx++
+			}
+			vals = append(vals, role.ID)
+
+			if len(setClauses) > 0 {
+				query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = %s",
+					quoteIdentifier(dbType, conn.RoleTable),
+					strings.Join(setClauses, ", "),
+					quoteIdentifier(dbType, idCol),
+					ph(paramIdx))
+				if _, err := db.Exec(query, vals...); err != nil {
+					log.Printf("[同步] 更新角色失败: %v", err)
+				} else {
+					log.Printf("[同步] 角色已更新: %s (ID=%d)", role.Name, role.ID)
+				}
+			}
+		} else if event == "role_create" {
+			colNames := make([]string, 0)
+			placeholders := make([]string, 0)
+			vals := make([]interface{}, 0)
+			paramIdx := 1
+			for col, val := range cols {
+				colNames = append(colNames, quoteIdentifier(dbType, col))
+				placeholders = append(placeholders, ph(paramIdx))
+				vals = append(vals, val)
+				paramIdx++
+			}
+			query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+				quoteIdentifier(dbType, conn.RoleTable),
+				strings.Join(colNames, ", "),
+				strings.Join(placeholders, ", "))
+			if _, err := db.Exec(query, vals...); err != nil {
+				log.Printf("[同步] 插入角色失败: %v", err)
+			} else {
+				log.Printf("[同步] 角色已创建: %s (ID=%d)", role.Name, role.ID)
+			}
+		}
+	}
+}
+
+// resolveRoleSourceValue 解析角色属性值
+func resolveRoleSourceValue(m models.SyncAttributeMapping, role models.Role) interface{} {
+	var val interface{}
+	switch m.SourceAttribute {
+	case "id":
+		val = role.ID
+	case "name":
+		val = role.Name
+	case "code":
+		val = role.Code
+	case "description":
+		val = role.Description
+	case "status":
+		val = role.Status
+	}
+	return val
+}
+
 // ========== 工具函数 ==========
 
 func dialLDAP(conn models.Connector) (*ldapv3.Conn, error) {
@@ -2080,7 +2982,7 @@ func logSyncWithDetail(syncID uint, connID uint, direction, triggerType, event s
 	if detail != "" {
 		log.Printf("[同步] 错误详情(前几条):\n%s", detail)
 	}
-	storage.DB.Create(&models.SyncLog{
+	syncLog := models.SyncLog{
 		SynchronizerID: syncID,
 		ConnectorID:    connID,
 		Direction:      direction,
@@ -2093,7 +2995,11 @@ func logSyncWithDetail(syncID uint, connID uint, direction, triggerType, event s
 		Detail:         detail,
 		AffectedCount:  affected,
 		Duration:       duration,
-	})
+	}
+	storage.DB.Create(&syncLog)
+	
+	// 广播同步日志事件（供前端实时刷新）
+	broadcastSyncLog(syncLog)
 }
 
 // ========== 事件分发 ==========
@@ -2280,6 +3186,7 @@ func logSyncRule(ruleID, connID uint, direction, triggerType, event string, user
 // UpstreamSyncResult 上游同步结果
 type UpstreamSyncResult struct {
 	DepartmentsSynced int              `json:"departmentsSynced"`
+	GroupsDeleted     int              `json:"groupsDeleted"`
 	UsersCreated      int              `json:"usersCreated"`
 	UsersUpdated      int              `json:"usersUpdated"`
 	UsersDisabled     int              `json:"usersDisabled"`

@@ -174,7 +174,7 @@ func getEnv(key, fallback string) string {
 func loadDatabaseConfig() storage.DBConfig {
 	configPath := getEnv("DB_CONFIG", "./data/database.yaml")
 
-	// 默认配置
+	// 默认配置（硬编码，确保不会出错）
 	defaultCfg := storage.DBConfig{
 		Host:     "127.0.0.1",
 		Port:     5432,
@@ -186,10 +186,27 @@ func loadDatabaseConfig() storage.DBConfig {
 		MaxOpen:  100,
 	}
 
+	// 优先检查环境变量
+	envHost := os.Getenv("DB_HOST")
+	if envHost != "" {
+		log.Printf("[DB] 使用环境变量配置: DB_HOST=%s", envHost)
+		return storage.DBConfig{
+			Host:     envHost,
+			Port:     getEnvIntOrDefault("DB_PORT", 0, 5432),
+			User:     getEnvOrDefault("DB_USER", "", "syncflow"),
+			Password: getEnvOrDefault("DB_PASSWORD", "", "syncflow"),
+			Database: getEnvOrDefault("DB_DATABASE", "", "go_syncflow"),
+			SSLMode:  getEnvOrDefault("DB_SSLMODE", "", "disable"),
+			MaxIdle:  10,
+			MaxOpen:  100,
+		}
+	}
+
 	// 尝试读取配置文件
+	log.Printf("[DB] 尝试读取配置文件: %s", configPath)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		log.Printf("[DB] 配置文件不存在，使用默认配置")
+		log.Printf("[DB] 配置文件不存在(%v)，使用默认配置", err)
 		return defaultCfg
 	}
 
@@ -199,17 +216,42 @@ func loadDatabaseConfig() storage.DBConfig {
 		return defaultCfg
 	}
 
-	// 支持环境变量覆盖
-	return storage.DBConfig{
-		Host:     getEnvOrDefault("DB_HOST", cfg.Host, "127.0.0.1"),
-		Port:     getEnvIntOrDefault("DB_PORT", cfg.Port, 5432),
-		User:     getEnvOrDefault("DB_USER", cfg.User, "syncflow"),
-		Password: getEnvOrDefault("DB_PASSWORD", cfg.Password, "syncflow"),
-		Database: getEnvOrDefault("DB_DATABASE", cfg.Database, "go_syncflow"),
-		SSLMode:  getEnvOrDefault("DB_SSLMODE", cfg.SSLMode, "disable"),
+	log.Printf("[DB] 配置文件解析成功: host=%s, port=%d, user=%s, database=%s",
+		cfg.Host, cfg.Port, cfg.User, cfg.Database)
+
+	// 返回配置（使用配置文件值，带默认值保护）
+	result := storage.DBConfig{
+		Host:     cfg.Host,
+		Port:     cfg.Port,
+		User:     cfg.User,
+		Password: cfg.Password,
+		Database: cfg.Database,
+		SSLMode:  cfg.SSLMode,
 		MaxIdle:  cfg.MaxIdle,
 		MaxOpen:  cfg.MaxOpen,
 	}
+
+	// 对空值使用默认值
+	if result.Host == "" {
+		result.Host = "127.0.0.1"
+	}
+	if result.Port == 0 {
+		result.Port = 5432
+	}
+	if result.User == "" {
+		result.User = "syncflow"
+	}
+	if result.Password == "" {
+		result.Password = "syncflow"
+	}
+	if result.Database == "" {
+		result.Database = "go_syncflow"
+	}
+	if result.SSLMode == "" {
+		result.SSLMode = "disable"
+	}
+
+	return result
 }
 
 func getEnvOrDefault(key, configValue, fallback string) string {

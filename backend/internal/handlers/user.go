@@ -139,6 +139,10 @@ func CreateUser(c *gin.Context) {
 
 	middleware.RecordOperationLog(c, "用户管理", "新增用户", req.Username, "")
 	syncer.DispatchSyncEvent(models.SyncEventUserCreate, user.ID, req.Password)
+	
+	// 广播用户创建事件
+	BroadcastUserChange("created", user.ID, user.Username)
+	
 	respondOK(c, user)
 }
 
@@ -228,6 +232,10 @@ func UpdateUser(c *gin.Context) {
 
 	middleware.RecordOperationLog(c, "用户管理", "编辑用户", user.Username, "")
 	syncer.DispatchSyncEvent(models.SyncEventUserUpdate, uint(id), "")
+	
+	// 广播用户更新事件
+	BroadcastUserChange("updated", uint(id), user.Username)
+	
 	respondOK(c, nil)
 }
 
@@ -260,6 +268,10 @@ func DeleteUser(c *gin.Context) {
 	storage.DB.Unscoped().Delete(&user)
 
 	middleware.RecordOperationLog(c, "用户管理", "删除用户", user.Username, "")
+	
+	// 广播用户删除事件
+	BroadcastUserChange("deleted", uint(id), user.Username)
+	
 	respondOK(c, nil)
 }
 
@@ -279,8 +291,10 @@ func UpdateUserStatus(c *gin.Context) {
 	middleware.RecordOperationLog(c, "用户管理", "更新状态", strconv.FormatUint(id, 10), "")
 	if req.Status == 1 {
 		syncer.DispatchSyncEvent(models.SyncEventUserEnable, uint(id), "")
+		BroadcastUserChange("enabled", uint(id), "")
 	} else {
 		syncer.DispatchSyncEvent(models.SyncEventUserDisable, uint(id), "")
+		BroadcastUserChange("disabled", uint(id), "")
 	}
 	respondOK(c, nil)
 }
@@ -353,6 +367,9 @@ func ResetUserPassword(c *gin.Context) {
 		fmt.Sprintf("自动生成密码, 通知: %v", req.NotifyChannels))
 
 	syncer.DispatchSyncEvent(models.SyncEventPasswordChange, uint(id), rawPassword)
+	
+	// 广播用户更新事件（密码变更）
+	BroadcastUserChange("password_changed", uint(id), user.Username)
 
 	respondOK(c, gin.H{
 		"message":      "密码重置成功",
